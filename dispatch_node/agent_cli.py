@@ -1,0 +1,406 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from .cmux import CmuxAdapter
+from .inbox import InboxWatcher
+from .pm import PMClient, PMServerError
+from .registry import LocalRegistry
+from .server_url import validate_server_url
+
+
+DEFAULT_CONFIG = Path.home() / ".config" / "dispatch" / "agent.json"
+
+
+def load_config(path: Path | None = None) -> dict:
+    path = path or Path(os.environ.get("DISPATCH_AGENT_CONFIG", DEFAULT_CONFIG))
+    try:
+        value = json.loads(path.read_text())
+    except FileNotFoundError as error:
+        raise RuntimeError("Dispatch agent CLI is not configured") from error
+    if not value.get("registry") or not value.get("server"):
+        raise RuntimeError("invalid Dispatch agent configuration")
+    try:
+        value["server"] = validate_server_url(value["server"])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError(f"invalid Dispatch agent configuration: {error}") from error
+    return value
+
+
+def current_binding(registry: LocalRegistry, adapter: CmuxAdapter) -> dict:
+    context_surface = adapter.current_surface_id()
+    if context_surface:
+        direct = registry.binding_for_surface(context_surface)
+        if direct is not None:
+            return direct
+    canonical_surface = (
+        adapter.canonical_surface_for_context(context_surface)
+        if context_surface
+        else None
+    )
+    binding = (
+        registry.binding_for_surface(canonical_surface)
+        if canonical_surface
+        else None
+    )
+    if binding is None:
+        raise RuntimeError("current cmux context is not connected to Dispatch")
+    return binding
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog="dispatch",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Read and write the shared Dispatch project room from an attached agent.",
+        epilog="""Typical flow:
+  dispatch init --project PROJECT_ID
+  dispatch inbox
+  dispatch history 20
+  dispatch reply \"implementation complete\"
+  dispatch request --level r3 \"approval required\"
+
+inbox is the agent's new-message feed. history is the shared project room.
+Use role names as stable addresses; session names may change.""",
+    )
+    commands = result.add_subparsers(dest="command", required=True)
+    initialize = commands.add_parser(
+        "init", help="read current project roles and Dispatch usage"
+    )
+    initialize.add_argument("--project", required=True)
+    commands.add_parser("inbox", help="read new messages for this agent")
+    history = commands.add_parser("history", help="read shared project history")
+    history.add_argument("count", nargs="?", type=int, default=20)
+    history.add_argument("--after", type=int)
+    history.add_argument("--project")
+    reply = commands.add_parser(
+        "reply", help="send a message (defaults to PM)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Examples:
+  dispatch reply \"done\"
+  dispatch reply --role reviewer \"please review\"
+  dispatch reply --track feature/login --tag commit/abc123 \"implemented\"
+  dispatch reply --in-reply-to 42 \"verified\"
+
+--in-reply-to inherits the parent message's track and tags by default.
+Successful output echoes the exact body stored by the server.""",
+    )
+    add_message_arguments(reply)
+    request = commands.add_parser(
+        "request", help="request attention or approval",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""Levels:
+  r1  informational request
+  r2  review or intervention requested (default)
+  r3  explicit PM confirmation or approval required
+
+Examples:
+  dispatch request --level r2 --role reviewer \"review this change\"
+  dispatch request --level r3 --track release/1.0 --tag commit/abc123 \"approve release\"
+
+--in-reply-to inherits the parent message's track and tags by default.
+Successful output echoes the exact body stored by the server.""",
+    )
+    add_message_arguments(request, include_level=True)
+    shared = commands.add_parser("shared", help="read selected shared SSOT keys")
+    shared.add_argument("keys", nargs="+")
+    work = commands.add_parser("work", help="track structured work time and reports")
+    work_commands = work.add_subparsers(dest="work_command", required=True)
+    for name in ("start", "report", "done"):
+        item = work_commands.add_parser(name)
+        item.add_argument("text", nargs="+")
+    return result
+
+
+def add_message_arguments(
+    command: argparse.ArgumentParser, *, include_level: bool = False
+) -> None:
+    command.add_argument("body", nargs="+", help="message body; maximum 20,000 characters")
+    if include_level:
+        command.add_argument(
+            "--level", choices=("r1", "r2", "r3"), default="r2",
+            help="attention level: r1 info, r2 review, r3 PM approval",
+        )
+    command.add_argument("--to", help="direct recipient local name or principal ID")
+    command.add_argument(
+        "--role", action="append", default=[],
+        help="stable role recipient; repeat for multiple roles",
+    )
+    command.add_argument(
+        "--reference", action="append", default=[],
+        help="CC without inbox delivery; repeat for multiple references",
+    )
+    command.add_argument(
+        "--track",
+        help="one primary work thread, usually a branch such as feature/login",
+    )
+    command.add_argument(
+        "--tag", action="append",
+        help="secondary metadata; repeat, e.g. commit/abc123 or ticket/ARC-42",
+    )
+    command.add_argument(
+        "--in-reply-to", type=int,
+        help="parent message seq; inherits its track and tags unless disabled",
+    )
+    command.add_argument(
+        "--project", help="project ID override; defaults to init/inbox project",
+    )
+    command.add_argument(
+        "--no-inherit-context", action="store_true",
+        help="do not inherit track and tags from --in-reply-to",
+    )
+
+
+def format_bootstrap(value: dict) -> str:
+    own_role = value.get("own_role")
+    own = f"@{own_role['name']}" if own_role else "direct session (no role)"
+    roles = []
+    for role in value.get("roles", []):
+        if role.get("self"):
+            owner = "you"
+        elif role.get("agent_name"):
+            owner = role["agent_name"]
+        else:
+            owner = "unassigned"
+        roles.append(f"@{role['name']}={owner}")
+    usage = value["usage"]
+    return "\n".join(
+        [
+            f"Dispatch init {value['revision']}",
+            f"project: {value['project']['name']}",
+            f"you: {own}",
+            f"pm: {value['pm']['display_name']}",
+            "roles: " + (", ".join(roles) if roles else "none"),
+            "commands:",
+            f"- read: {usage['inbox']}",
+            f"- restore context: {usage['history']}",
+            f"- reply PM: {usage['reply_pm']}",
+            f"- message role: {usage['message_role']}",
+            f"- request review/approval: {usage['request_review']} / {usage['request_approval']}",
+            f"- work: {usage['work_start']} / {usage['work_report']} / {usage['work_done']}",
+            f"- recovery: {usage['recovery']}",
+            "Use role names as stable addresses. Report results and blockers through Dispatch.",
+        ]
+    )
+
+
+def active_project(registry: LocalRegistry, principal_id: str) -> str:
+    return registry.state(f"active_project:{principal_id}") or "local"
+
+
+def emit_inbox(messages: list[dict]) -> None:
+    payload = {
+        "messages": [
+            {
+                "seq": message["seq"],
+                "project": message.get("workspace_id"),
+                "from": message.get("sender_name", message["sender_id"]),
+                "body": message["body"],
+                "track": message.get("track"),
+                "tags": message.get("tags", []),
+            }
+            for message in messages
+        ]
+    }
+    print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    if messages:
+        print('Reply with: dispatch reply "YOUR MESSAGE"', file=sys.stderr)
+        print(
+            "If inbox output was not captured, recover with: dispatch history 20",
+            file=sys.stderr,
+        )
+
+
+def compact_history(project_id: str, messages: list[dict]) -> dict:
+    items = []
+    for message in messages:
+        role_agent_ids = {
+            role.get("delivered_agent_id")
+            for role in message.get("role_recipients", [])
+            if role.get("delivered_agent_id")
+        }
+        to = [f"@{role['name']}" for role in message.get("role_recipients", [])]
+        to.extend(
+            recipient["display_name"]
+            for recipient in message.get("recipients", [])
+            if recipient["recipient_id"] not in role_agent_ids
+        )
+        items.append(
+            {
+                "seq": message["seq"],
+                "at": message["created_at"],
+                "from": message["sender_name"],
+                "to": to,
+                "body": message["body"],
+                "kind": message["kind"],
+                "reply_level": message["reply_level"],
+                "in_reply_to": message.get("in_reply_to"),
+                "track": message.get("track"),
+                "tags": message.get("tags", []),
+            }
+        )
+    return {"project": project_id, "messages": items}
+
+
+def stored_echo(result: dict, *, roles: list[str]) -> dict:
+    return {
+        "stored": {
+            "seq": result["seq"],
+            "project": result["workspace_id"],
+            "from": result["sender_id"],
+            "recipient_ids": result.get("recipient_ids", []),
+            "roles": roles,
+            "body": result["body"],
+            "body_chars": len(result["body"]),
+            "kind": result["kind"],
+            "reply_level": result["reply_level"],
+            "in_reply_to": result.get("in_reply_to"),
+            "track": result.get("track"),
+            "tags": result.get("tags", []),
+        }
+    }
+
+
+def write_error_message(error: Exception) -> str:
+    return (
+        f"{error}\n"
+        "Hint: initialize or refresh project context first: "
+        "dispatch init --project PROJECT_ID. "
+        "Then retry reply/request; use dispatch history 20 to verify room context."
+    )
+
+
+def main() -> None:
+    args = parser().parse_args()
+    try:
+        config = load_config()
+        registry = LocalRegistry(Path(config["registry"]))
+        adapter = CmuxAdapter()
+        binding = current_binding(registry, adapter)
+        if args.command == "init":
+            client = PMClient(config["server"], registry, workspace_id=args.project)
+            value = client.project_bootstrap(
+                args.project, binding["principal_id"]
+            )
+            registry.set_state(f"active_project:{binding['principal_id']}", args.project)
+            print(format_bootstrap(value))
+        elif args.command == "inbox":
+            messages = InboxWatcher(
+                config["server"], binding["principal_id"], registry
+            ).read_messages(binding["surface_id"])
+            emit_inbox(messages)
+            if messages:
+                latest_project = messages[-1].get("workspace_id")
+                if latest_project:
+                    registry.set_state(
+                        f"active_project:{binding['principal_id']}", latest_project
+                    )
+        elif args.command == "history":
+            if not 1 <= args.count <= 500:
+                raise RuntimeError("history count must be between 1 and 500")
+            workspace_id = args.project or active_project(
+                registry, binding["principal_id"]
+            )
+            client = PMClient(config["server"], registry, workspace_id=workspace_id)
+            messages = client.timeline(args.count, after=args.after)
+            print(
+                json.dumps(
+                    compact_history(workspace_id, messages),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        elif args.command == "reply":
+            workspace_id = args.project or active_project(
+                registry, binding["principal_id"]
+            )
+            client = PMClient(config["server"], registry, workspace_id=workspace_id)
+            recipient = args.to or (None if args.role else str(client.pm_id))
+            result = client.send_as(
+                binding["local_name"], recipient, " ".join(args.body),
+                reference_ids=args.reference,
+                in_reply_to=args.in_reply_to,
+                track=args.track,
+                tags=args.tag,
+                inherit_context=not args.no_inherit_context,
+                role_ids=args.role,
+            )
+            print(json.dumps(stored_echo(result, roles=args.role), ensure_ascii=False))
+        elif args.command == "request":
+            workspace_id = args.project or active_project(
+                registry, binding["principal_id"]
+            )
+            client = PMClient(config["server"], registry, workspace_id=workspace_id)
+            recipient = args.to or (None if args.role else str(client.pm_id))
+            result = client.send_as(
+                binding["local_name"],
+                recipient,
+                " ".join(args.body),
+                kind="pm_request",
+                reply_level=args.level,
+                reference_ids=args.reference,
+                in_reply_to=args.in_reply_to,
+                track=args.track,
+                tags=args.tag,
+                inherit_context=not args.no_inherit_context,
+                role_ids=args.role,
+            )
+            print(json.dumps(stored_echo(result, roles=args.role), ensure_ascii=False))
+        elif args.command == "shared":
+            values = PMClient(
+                config["server"], registry,
+                workspace_id=active_project(registry, binding["principal_id"]),
+            ).shared(args.keys)
+            found = {item["key"] for item in values}
+            print(
+                json.dumps(
+                    {
+                        "shared": {
+                            item["key"]: item["value"] for item in values
+                        },
+                        "missing": [key for key in args.keys if key not in found],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            client = PMClient(
+                config["server"], registry,
+                workspace_id=active_project(registry, binding["principal_id"]),
+            )
+            text = " ".join(args.text)
+            if args.work_command == "start":
+                result = client.start_work(binding["local_name"], text)
+            else:
+                result = client.update_work(
+                    binding["local_name"],
+                    text,
+                    done=args.work_command == "done",
+                )
+            print(
+                json.dumps(
+                    {
+                        "work": result["id"],
+                        "status": result["status"],
+                        "elapsed_seconds": result["elapsed_seconds"],
+                        "token_usage": result["token_usage"],
+                    }
+                )
+            )
+    except PMServerError as error:
+        if "args" in locals() and args.command in {"reply", "request"}:
+            raise SystemExit(write_error_message(error)) from error
+        raise SystemExit(str(error)) from error
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
+    finally:
+        if "registry" in locals():
+            registry.close()
+
+
+if __name__ == "__main__":
+    main()

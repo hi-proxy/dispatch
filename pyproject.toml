@@ -1,0 +1,35 @@
+[project]
+name = "dispatch"
+version = "0.1.0"
+description = "A chat room for the agent terminals you already have running"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "fastapi>=0.116,<1",
+  "uvicorn[standard]>=0.35,<1",
+  "websockets>=15,<17",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.28,<1",
+  "pytest>=8.4,<10",
+]
+
+[project.scripts]
+dispatch-server = "dispatch_server.main:run"
+dispatch-node = "dispatch_node.cli:main"
+dispatch = "dispatch_node.agent_cli:main"
+
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["dispatch_server*", "dispatch_node*"]
+
+[tool.setuptools.package-data]
+dispatch_node = ["web_assets/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

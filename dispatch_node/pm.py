@@ -1,0 +1,500 @@
+from __future__ import annotations
+
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from typing import Any
+
+from .registry import LocalRegistry
+from .server_url import validate_server_url
+
+
+class PMServerError(RuntimeError):
+    pass
+
+
+@dataclass
+class PMClient:
+    server_url: str
+    registry: LocalRegistry
+    pm_id: str | None = None
+    pm_name: str = "PM"
+    node_id: str | None = None
+    workspace_id: str = "local"
+    _targets: list[dict[str, Any]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.server_url = validate_server_url(self.server_url)
+        self.pm_id = self.pm_id or self.registry.pm_principal_id()
+        self.node_id = self.node_id or self.registry.node_id()
+
+    def _request(
+        self, method: str, path: str, payload: dict | None = None
+    ) -> dict | list:
+        data = json.dumps(payload).encode() if payload is not None else None
+        request = urllib.request.Request(
+            f"{self.server_url.rstrip('/')}{path}",
+            data=data,
+            headers={"content-type": "application/json"},
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5) as response:
+                if response.status == 204:
+                    return {}
+                return json.load(response)
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")
+            raise PMServerError(f"server {error.code}: {detail}") from error
+        except (urllib.error.URLError, json.JSONDecodeError) as error:
+            raise PMServerError(str(error)) from error
+
+    def _raw_request(
+        self, method: str, path: str, data: bytes | None = None,
+        content_type: str | None = None,
+    ) -> tuple[bytes, str]:
+        headers = {"content-type": content_type} if content_type else {}
+        request = urllib.request.Request(
+            f"{self.server_url.rstrip('/')}{path}", data=data,
+            headers=headers, method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                return response.read(), response.headers.get_content_type()
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")
+            raise PMServerError(f"server {error.code}: {detail}") from error
+        except urllib.error.URLError as error:
+            raise PMServerError(str(error)) from error
+
+    def sync_connections(self) -> list[dict[str, Any]]:
+        self._request(
+            "PUT",
+            f"/v1/principals/{self.pm_id}",
+            {
+                "id": self.pm_id,
+                "kind": "human",
+                "display_name": self._display_name(self.pm_name),
+            },
+        )
+        self._request(
+            "PUT",
+            f"/v1/nodes/{self.node_id}",
+            {"id": self.node_id, "display_name": self._display_name("Node")},
+        )
+        targets = self.registry.list()
+        for binding in targets:
+            recipient_id = binding["principal_id"]
+            self._request(
+                "PUT",
+                f"/v1/principals/{recipient_id}",
+                {
+                    "id": recipient_id,
+                    "kind": "agent",
+                    "display_name": self._display_name(
+                        binding.get("nickname") or binding["local_name"]
+                    ),
+                },
+            )
+            self._request(
+                "PUT",
+                f"/v1/bindings/{recipient_id}",
+                {
+                    "agent_id": recipient_id,
+                    "node_id": self.node_id,
+                    "agent_provider": binding["provider"],
+                    "agent_session_id": binding["agent_session_id"],
+                    "terminal_provider": "cmux",
+                    "terminal_session_id": binding["surface_id"],
+                    "lifecycle": binding["lifecycle"],
+                },
+            )
+        self._targets = targets
+        return targets
+
+    def _display_name(self, name: str) -> str:
+        suffix = str(self.node_id).removeprefix("node-")[:8]
+        return name if self.node_id == "node-local" else f"{name}@{suffix}"
+
+    def _recipient_id(self, identity: str) -> str:
+        binding = self.registry.binding(identity)
+        return binding["principal_id"] if binding else identity
+
+    def _role_id(self, identity: str) -> str:
+        matches = [
+            role for role in self.roles()
+            if role["id"] == identity or role["name"] == identity
+        ]
+        if len(matches) != 1:
+            raise PMServerError(f"role is not uniquely discoverable: {identity}")
+        return str(matches[0]["id"])
+
+    def targets(self) -> list[dict[str, Any]]:
+        return list(self._targets)
+
+    def projects(self) -> list[dict]:
+        result = self._request("GET", "/v1/projects")
+        assert isinstance(result, list)
+        return result
+
+    def create_project(self, name: str) -> dict:
+        result = self._request("POST", "/v1/projects", {"name": name})
+        assert isinstance(result, dict)
+        return result
+
+    def update_project(self, project_id: str, name: str) -> dict:
+        result = self._request(
+            "PATCH", f"/v1/projects/{urllib.parse.quote(project_id)}", {"name": name}
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def pm_profile(self) -> dict:
+        result = self._request("GET", f"/v1/pm-profiles/{self.pm_id}")
+        assert isinstance(result, dict)
+        return result
+
+    def update_pm_profile(self, display_name: str) -> dict:
+        result = self._request(
+            "PATCH", f"/v1/pm-profiles/{self.pm_id}",
+            {"display_name": display_name},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def put_pm_avatar(self, data: bytes, media_type: str) -> None:
+        self._raw_request(
+            "PUT", f"/v1/pm-profiles/{self.pm_id}/avatar", data, media_type
+        )
+
+    def pm_avatar(self) -> tuple[bytes, str]:
+        return self._raw_request("GET", f"/v1/pm-profiles/{self.pm_id}/avatar")
+
+    def delete_pm_avatar(self) -> None:
+        self._raw_request("DELETE", f"/v1/pm-profiles/{self.pm_id}/avatar")
+
+    def agent_role_memberships(self) -> list[dict]:
+        result = self._request("GET", "/v1/agent-role-memberships")
+        assert isinstance(result, list)
+        return result
+
+    def project_bootstrap(self, project_id: str, agent_id: str) -> dict:
+        query = urllib.parse.urlencode(
+            {"agent_id": agent_id, "pm_id": self.pm_id}
+        )
+        result = self._request(
+            "GET", f"/v1/projects/{urllib.parse.quote(project_id)}/bootstrap?{query}"
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def agent_statuses(self) -> list[dict[str, Any]]:
+        statuses = []
+        for binding in self.registry.list():
+            state = self._request(
+                "GET", f"/v1/inbox/state/{binding['principal_id']}"
+            )
+            assert isinstance(state, dict)
+            pending = self.registry.pending_summary(binding["local_name"])
+            statuses.append(
+                {
+                    "id": binding["local_name"],
+                    "nickname": binding.get("nickname"),
+                    "provider": binding["provider"],
+                    "lifecycle": binding["lifecycle"],
+                    "local_pending": pending["pending_count"],
+                    **state,
+                }
+            )
+        return statuses
+
+    def send(
+        self, recipient_id: str, body: str, *, in_reply_to: int | None = None
+    ) -> dict:
+        return self.send_many([recipient_id], body, in_reply_to=in_reply_to)
+
+    def send_many(
+        self,
+        recipient_ids: list[str],
+        body: str,
+        *,
+        in_reply_to: int | None = None,
+        reference_ids: list[str] | None = None,
+        role_ids: list[str] | None = None,
+        track: str | None = None,
+        tags: list[str] | None = None,
+        inherit_context: bool = True,
+    ) -> dict:
+        result = self._request(
+            "POST",
+            "/v1/messages",
+            {
+                "workspace_id": self.workspace_id,
+                "sender_id": self.pm_id,
+                "recipient_ids": [
+                    self._recipient_id(recipient_id) for recipient_id in recipient_ids
+                ],
+                "reference_ids": [
+                    self._recipient_id(reference_id)
+                    for reference_id in (reference_ids or [])
+                ],
+                "role_ids": [self._role_id(role_id) for role_id in (role_ids or [])],
+                "body": body,
+                "in_reply_to": in_reply_to,
+                "track": track,
+                "tags": tags,
+                "inherit_context": inherit_context,
+            },
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def send_as(
+        self,
+        sender_id: str,
+        recipient_id: str | None,
+        body: str,
+        *,
+        kind: str = "message",
+        reply_level: str = "r1",
+        reference_ids: list[str] | None = None,
+        in_reply_to: int | None = None,
+        track: str | None = None,
+        tags: list[str] | None = None,
+        inherit_context: bool = True,
+        role_ids: list[str] | None = None,
+    ) -> dict:
+        result = self._request(
+            "POST",
+            "/v1/messages",
+            {
+                "workspace_id": self.workspace_id,
+                "sender_id": self._recipient_id(sender_id),
+                "recipient_ids": (
+                    [self._recipient_id(recipient_id)] if recipient_id else []
+                ),
+                "role_ids": [self._role_id(role_id) for role_id in (role_ids or [])],
+                "body": body,
+                "kind": kind,
+                "reply_level": reply_level,
+                "reference_ids": [
+                    self._recipient_id(reference_id)
+                    for reference_id in (reference_ids or [])
+                ],
+                "in_reply_to": in_reply_to,
+                "track": track,
+                "tags": tags,
+                "inherit_context": inherit_context,
+            },
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def attention(self) -> list[dict]:
+        result = self._request(
+            "GET",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/attention",
+        )
+        assert isinstance(result, list)
+        return result
+
+    def roles(self) -> list[dict]:
+        result = self._request(
+            "GET", f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/roles"
+        )
+        assert isinstance(result, list)
+        return result
+
+    def create_role(self, name: str, onboarding_prompt: str = "") -> dict:
+        result = self._request(
+            "POST", f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/roles",
+            {"name": name, "onboarding_prompt": onboarding_prompt},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def update_role(self, role_id: str, name: str, onboarding_prompt: str) -> dict:
+        result = self._request(
+            "PATCH", f"/v1/roles/{urllib.parse.quote(role_id)}",
+            {"name": name, "onboarding_prompt": onboarding_prompt},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def delete_role(self, role_id: str) -> None:
+        self._request("DELETE", f"/v1/roles/{urllib.parse.quote(role_id)}")
+
+    def assign_role(self, role_id: str, agent_id: str, send_onboarding: bool) -> dict:
+        result = self._request(
+            "PUT", f"/v1/roles/{urllib.parse.quote(role_id)}/assignment",
+            {
+                "agent_id": self._recipient_id(agent_id),
+                "assigned_by": self.pm_id,
+                "send_onboarding": send_onboarding,
+            },
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def unassign_role(self, role_id: str) -> None:
+        self._request("DELETE", f"/v1/roles/{urllib.parse.quote(role_id)}/assignment")
+
+    def assignment_history(self, role_id: str) -> list[dict]:
+        result = self._request(
+            "GET", f"/v1/roles/{urllib.parse.quote(role_id)}/assignments"
+        )
+        assert isinstance(result, list)
+        return result
+
+    def put_role_avatar(self, role_id: str, data: bytes, media_type: str) -> None:
+        self._raw_request(
+            "PUT", f"/v1/roles/{urllib.parse.quote(role_id)}/avatar",
+            data, media_type,
+        )
+
+    def role_avatar(self, role_id: str) -> tuple[bytes, str]:
+        return self._raw_request(
+            "GET", f"/v1/roles/{urllib.parse.quote(role_id)}/avatar"
+        )
+
+    def delete_role_avatar(self, role_id: str) -> None:
+        self._raw_request(
+            "DELETE", f"/v1/roles/{urllib.parse.quote(role_id)}/avatar"
+        )
+
+    def shared(self, keys: list[str] | None = None) -> list[dict]:
+        query = urllib.parse.urlencode({"keys": keys or []}, doseq=True)
+        suffix = f"?{query}" if query else ""
+        result = self._request(
+            "GET", f"/v1/shared/{urllib.parse.quote(self.workspace_id)}{suffix}"
+        )
+        assert isinstance(result, list)
+        return result
+
+    def put_shared(self, key: str, value: str) -> dict:
+        result = self._request(
+            "PUT",
+            f"/v1/shared/{urllib.parse.quote(self.workspace_id)}/"
+            f"{urllib.parse.quote(key, safe='')}?"
+            f"{urllib.parse.urlencode({'updated_by': self.pm_id})}",
+            {"value": value},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def delete_shared(self, key: str) -> None:
+        self._request(
+            "DELETE",
+            f"/v1/shared/{urllib.parse.quote(self.workspace_id)}/"
+            f"{urllib.parse.quote(key, safe='')}",
+        )
+
+    def bookmarks(self) -> list[dict]:
+        result = self._request(
+            "GET",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/bookmarks",
+        )
+        assert isinstance(result, list)
+        return result
+
+    def create_bookmark(self, message_seq: int, label: str) -> dict:
+        result = self._request(
+            "POST",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/messages/"
+            f"{message_seq}/bookmarks",
+            {"label": label, "created_by": self.pm_id},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def delete_bookmark(self, bookmark_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/bookmarks/"
+            f"{urllib.parse.quote(bookmark_id)}",
+        )
+
+    def timeline_pins(self) -> list[dict]:
+        result = self._request(
+            "GET",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/timeline-pins",
+        )
+        assert isinstance(result, list)
+        return result
+
+    def create_timeline_pin(self, after_message_seq: int, label: str) -> dict:
+        result = self._request(
+            "POST",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/messages/"
+            f"{after_message_seq}/timeline-pins",
+            {"label": label, "created_by": self.pm_id},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def delete_timeline_pin(self, pin_id: str) -> None:
+        self._request(
+            "DELETE",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/timeline-pins/"
+            f"{urllib.parse.quote(pin_id)}",
+        )
+
+    def work_items(self) -> list[dict]:
+        result = self._request(
+            "GET", f"/v1/work/{urllib.parse.quote(self.workspace_id)}"
+        )
+        assert isinstance(result, list)
+        return result
+
+    def start_work(self, agent_id: str, title: str) -> dict:
+        result = self._request(
+            "POST",
+            "/v1/work",
+            {
+                "workspace_id": self.workspace_id,
+                "agent_id": self._recipient_id(agent_id),
+                "title": title,
+            },
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def update_work(self, agent_id: str, report: str, *, done: bool) -> dict:
+        action = "done" if done else "report"
+        agent_id = self._recipient_id(agent_id)
+        result = self._request(
+            "POST", f"/v1/work/{urllib.parse.quote(agent_id)}/{action}",
+            {"report": report},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def timeline(
+        self, limit: int = 100, after: int | None = None,
+        before: int | None = None,
+    ) -> list[dict]:
+        query = {"limit": limit}
+        if after is not None:
+            query["after"] = after
+        if before is not None:
+            query["before"] = before
+        result = self._request(
+            "GET",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/timeline?"
+            f"{urllib.parse.urlencode(query)}",
+        )
+        assert isinstance(result, list)
+        return result
+
+
+def delivery_status(message: dict) -> str:
+    recipients = message.get("recipients") or []
+    if not recipients:
+        return "-"
+    if all(recipient.get("processed_at") for recipient in recipients):
+        return "processed"
+    if all(recipient.get("received_at") for recipient in recipients):
+        return "received"
+    return "sent"
