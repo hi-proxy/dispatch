@@ -222,16 +222,20 @@ def format_bootstrap(value: dict) -> str:
 def permission_gate(
     config: dict, registry: LocalRegistry, binding: dict, wait_seconds: int
 ) -> dict:
-    """권한 요청을 PM에게 넘기고 답을 기다린다.
+    """권한 요청이 무엇인지 PM에게 알리고 곧바로 비켜선다.
 
-    터미널에는 아무것도 넣지 않는다. hook이 stdin으로 준 것을 그대로 서버에
-    올리고, PM이 앱에서 누른 답을 hook 응답으로 돌려준다.
+    이 hook은 권한 화면이 뜨기 **전에** 돈다. 여기서 기다리면 그만큼 터미널에
+    질문조차 뜨지 않는다. 예전에는 답을 기다리느라 최대 110초를 붙잡아, 결정을
+    돌려주지도 못하면서 터미널만 얼렸다.
 
-    답이 없으면 아무 판단도 하지 않고 비켜선다. 그러면 평소처럼 터미널에서
-    사람이 처리한다. 기다리다 못해 대신 승인하는 일은 하지 않는다.
+    돌려줄 수도 없다. 이 provider의 명령형 hook에는 PermissionRequest용 결정
+    형식이 없다(permissionDecision은 PreToolUse 전용이다). 그래서 판단은 늘
+    터미널에서 사람이 한다. 여기서 하는 일은 "무엇을 묻고 있는지"를 PM 화면에
+    올리는 것뿐이다. 그거면 원래 풀려던 문제 — 자리에 없으면 무엇을 묻는지 알
+    수 없다 — 는 풀린다.
+
+    wait_seconds는 예전 계약이라 받기만 하고 쓰지 않는다.
     """
-    import time
-
     try:
         payload = json.load(sys.stdin)
     except Exception:
@@ -244,7 +248,7 @@ def permission_gate(
     workspace_id = active_project(registry, binding["principal_id"])
     client = PMClient(config["server"], registry, workspace_id=workspace_id)
     try:
-        created = client.create_permission_request(
+        client.create_permission_request(
             session_id=session_id,
             agent_id=binding.get("principal_id"),
             tool_name=str(tool_name),
@@ -253,39 +257,6 @@ def permission_gate(
                 payload.get("permission_suggestions"), ensure_ascii=False
             ),
         )
-    except Exception:
-        return {}
-
-    request_id = created["id"]
-    deadline = time.monotonic() + max(0, wait_seconds)
-    while time.monotonic() < deadline:
-        time.sleep(1.5)
-        try:
-            current = client.permission_request(request_id)
-        except Exception:
-            break
-        status = current.get("status")
-        # PermissionRequest는 decision·reason으로 받는다.
-        # permissionDecision·permissionDecisionReason은 PreToolUse의 이름이라
-        # 여기서는 조용히 무시된다 — 눌러도 아무 일이 없는 것처럼 보인다.
-        if status == "allowed":
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": "allow",
-                    "reason": "PM이 Dispatch에서 승인했다.",
-                }
-            }
-        if status == "denied":
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PermissionRequest",
-                    "decision": "deny",
-                    "reason": "PM이 Dispatch에서 거절했다.",
-                }
-            }
-    try:
-        client.resolve_permission_request(request_id, "expired")
     except Exception:
         pass
     return {}

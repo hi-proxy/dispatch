@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
-# 게이트의 기본 대기가 110초다. 넉넉히 잡아 그보다 오래 pending인 것은 답을
-# 받아갈 쪽이 없다고 본다.
-PERMISSION_REQUEST_TTL_SECONDS = 180
+# 카드가 떠 있는 동안 입력창이 막힌다. 터미널에서 사람이 답해도 서버는 그걸
+# 모르므로, 사람이 답할 만한 시간이 지나면 스스로 걷는다. 너무 길면 이미 푼
+# 방을 계속 막고, 너무 짧으면 아직 멈춰 있는데 열어 준다.
+PERMISSION_REQUEST_TTL_SECONDS = 90
 
 
 SCHEMA = """

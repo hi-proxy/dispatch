@@ -22,13 +22,11 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if !model.snapshot.permissionRequests.isEmpty {
-                VStack(spacing: 8) {
-                    ForEach(model.snapshot.permissionRequests) { request in
-                        permissionCard(request)
-                    }
-                }
-                .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 4)
+            // 쌓지 않는다. 터미널은 한 번에 하나만 막히므로 가장 최근 것만
+            // 보면 된다. 여럿을 쌓으면 목록이 오르내리며 화면이 튄다.
+            if let blocking = model.snapshot.permissionRequests.last {
+                permissionCard(blocking)
+                    .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 4)
             }
 
             if !model.snapshot.attention.isEmpty {
@@ -275,16 +273,11 @@ struct ChatView: View {
                 .font(.caption.monospaced()).foregroundStyle(.secondary)
                 .lineLimit(4).textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            HStack {
-                Spacer()
-                Button("거절") {
-                    Task { await model.resolvePermission(request, allow: false) }
-                }
-                Button("승인") {
-                    Task { await model.resolvePermission(request, allow: true) }
-                }
-                .buttonStyle(.borderedProminent).tint(.orange)
-            }
+            // 승인·거절 버튼을 두지 않는다. 이 provider에서는 명령형 hook이
+            // 결정을 돌려줄 수 없어서, 눌러도 터미널은 계속 멈춰 있다. 되는
+            // 것처럼 보이는 버튼이 제일 나쁘다.
+            Text("터미널에서 답해야 풀린다. 답이 없으면 잠시 뒤 스스로 물러난다.")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(12)
         .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
@@ -511,21 +504,30 @@ private struct ChatComposer: View {
                         return .handled
                     }
                     .onChange(of: draft) { mentionError = nil }
+                    .disabled(blockedBy != nil)
                 Button { Task { await send() } } label: {
                     Image(systemName: "arrow.up").font(.body.bold())
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(.borderedProminent).buttonBorderShape(.circle)
                 .disabled(
-                    draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    blockedBy != nil
+                        || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         || (!startsWithMention
                             && model.selectedTargets.isEmpty
                             && model.selectedRoles.isEmpty)
                 )
             }
             .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 14))
+            .opacity(blockedBy == nil ? 1 : 0.45)
             HStack {
-                if let mentionError {
+                if let blocked = blockedBy {
+                    Label(
+                        "\(blocked.agentName ?? "에이전트") 터미널이 권한 확인에서 멈춰 있다."
+                            + " 지금 보내도 읽지 못한다.",
+                        systemImage: "lock.trianglebadge.exclamationmark.fill"
+                    ).font(.caption).foregroundStyle(.orange)
+                } else if let mentionError {
                     Label(mentionError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption).foregroundStyle(.red)
                 } else {
@@ -541,6 +543,12 @@ private struct ChatComposer: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12).background(.bar)
+    }
+
+    /// 터미널이 권한 확인에서 멈춰 있으면 보내도 읽지 못한다. 그 사실을
+    /// 화면이 감추면 PM은 보냈다고 믿고 기다린다.
+    private var blockedBy: PermissionRequest? {
+        model.snapshot.permissionRequests.last
     }
 
     private var participantSelector: some View {

@@ -89,16 +89,17 @@ def test_stale_pending_requests_stop_showing_as_cards(tmp_path, monkeypatch):
         ).json()["status"] == "expired"
 
 
-def test_gate_speaks_the_permission_request_hook_contract(tmp_path, monkeypatch):
-    """PermissionRequest는 decision·reason으로 받는다.
+def test_gate_never_holds_the_terminal(tmp_path, monkeypatch):
+    """이 hook은 권한 화면이 뜨기 전에 돈다. 여기서 기다리면 질문조차 안 뜬다.
 
-    permissionDecision·permissionDecisionReason은 PreToolUse의 이름이다. 그걸
-    보내면 조용히 무시돼서, PM이 눌러도 터미널에서 아무 일이 없다. 8/16 실측:
-    승인 15건이 DB에 정상 기록됐는데 하나도 전달되지 않았다. API 왕복만
-    검사하고 hook 계약은 검사하지 않아 새어나갔다.
+    예전에는 답을 기다리느라 최대 110초를 붙잡았다. 결정을 돌려줄 수도 없는데
+    (permissionDecision은 PreToolUse 전용) 터미널만 얼렸다. 8/16 실측에서 PM이
+    "걍 블로킹"으로 겪었다.
     """
     import io
     from dispatch_node import agent_cli
+
+    polled = []
 
     class FakeClient:
         def __init__(self, *args, **kwargs):
@@ -108,7 +109,12 @@ def test_gate_speaks_the_permission_request_hook_contract(tmp_path, monkeypatch)
             return {"id": "req-1"}
 
         def permission_request(self, request_id):
-            return {"status": "allowed"}
+            polled.append(request_id)
+            return {"status": "pending"}
+
+    class FakeRegistry:
+        def state(self, key):
+            return "local"
 
     monkeypatch.setattr(agent_cli, "PMClient", FakeClient)
     monkeypatch.setattr(
@@ -116,16 +122,9 @@ def test_gate_speaks_the_permission_request_hook_contract(tmp_path, monkeypatch)
         io.StringIO(json.dumps({"session_id": "s-1", "tool_name": "Bash"})),
     )
 
-    class FakeRegistry:
-        def state(self, key):
-            return "local"
-
     result = agent_cli.permission_gate(
         {"server": "http://127.0.0.1:8787"}, FakeRegistry(),
-        {"principal_id": "agent-a"}, wait_seconds=5,
+        {"principal_id": "agent-a"}, wait_seconds=110,
     )
-    output = result["hookSpecificOutput"]
-    assert output["hookEventName"] == "PermissionRequest"
-    assert output["decision"] == "allow"
-    assert "reason" in output
-    assert "permissionDecision" not in output
+    assert result == {}
+    assert polled == []
