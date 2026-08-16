@@ -180,6 +180,8 @@ struct ChatMessage: Decodable, Identifiable {
     var track: String?
     var tags: [String]
     var inReplyTo: Int?
+    /// 답장이 가리키는 부모의 방별 번호. 화면에는 이 값을 쓴다.
+    var inReplyToProjectSeq: Int?
     var detectedContexts: [DetectedContext]
     var roleRecipients: [RoleRecipient]
     var id: Int { seq }
@@ -193,6 +195,7 @@ struct ChatMessage: Decodable, Identifiable {
         case detectedContexts = "detected_contexts"
         case roleRecipients = "role_recipients"
         case inReplyTo = "in_reply_to"
+        case inReplyToProjectSeq = "in_reply_to_project_seq"
         case pmRelation = "pm_relation"
         case senderID = "sender_id"
         case senderName = "sender_name"

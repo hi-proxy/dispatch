@@ -970,10 +970,12 @@ class DispatchDB:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT m.*, p.display_name AS sender_name
+                SELECT m.*, p.display_name AS sender_name,
+                              parent.project_seq AS in_reply_to_project_seq
                 FROM messages m
                 JOIN inbox i ON i.message_seq = m.seq
                 JOIN principals p ON p.id = m.sender_id
+                LEFT JOIN messages parent ON parent.seq = m.in_reply_to
                 WHERE i.recipient_id = ? AND m.seq > ?
                 ORDER BY m.seq ASC
                 """,
@@ -994,6 +996,7 @@ class DispatchDB:
                 SELECT DISTINCT m.*, p.display_name AS sender_name
                 FROM messages m
                 JOIN principals p ON p.id = m.sender_id
+                LEFT JOIN messages parent ON parent.seq = m.in_reply_to
                 LEFT JOIN inbox own ON own.message_seq = m.seq
                   AND own.recipient_id = ?
                 WHERE m.sender_id = ? OR own.recipient_id IS NOT NULL
@@ -1028,8 +1031,10 @@ class DispatchDB:
         with self._lock:
             if before is not None:
                 rows = self._connection.execute(
-                    """SELECT m.*, p.display_name AS sender_name
+                    """SELECT m.*, p.display_name AS sender_name,
+                              parent.project_seq AS in_reply_to_project_seq
                        FROM messages m JOIN principals p ON p.id = m.sender_id
+                       LEFT JOIN messages parent ON parent.seq = m.in_reply_to
                        WHERE m.workspace_id = ? AND m.seq < ?
                        ORDER BY m.seq DESC LIMIT ?""",
                     (workspace_id, before, limit),
@@ -1037,8 +1042,10 @@ class DispatchDB:
                 rows = list(reversed(rows))
             elif after is None:
                 rows = self._connection.execute(
-                    """SELECT m.*, p.display_name AS sender_name
+                    """SELECT m.*, p.display_name AS sender_name,
+                              parent.project_seq AS in_reply_to_project_seq
                        FROM messages m JOIN principals p ON p.id = m.sender_id
+                       LEFT JOIN messages parent ON parent.seq = m.in_reply_to
                        WHERE m.workspace_id = ?
                        ORDER BY m.seq DESC LIMIT ?""",
                     (workspace_id, limit),
@@ -1046,8 +1053,10 @@ class DispatchDB:
                 rows = list(reversed(rows))
             else:
                 rows = self._connection.execute(
-                    """SELECT m.*, p.display_name AS sender_name
+                    """SELECT m.*, p.display_name AS sender_name,
+                              parent.project_seq AS in_reply_to_project_seq
                        FROM messages m JOIN principals p ON p.id = m.sender_id
+                       LEFT JOIN messages parent ON parent.seq = m.in_reply_to
                        WHERE m.workspace_id = ? AND m.seq > ?
                        ORDER BY m.seq ASC LIMIT ?""",
                     (workspace_id, after, limit),
@@ -1205,9 +1214,11 @@ class DispatchDB:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT m.*, p.display_name AS sender_name
+                SELECT m.*, p.display_name AS sender_name,
+                              parent.project_seq AS in_reply_to_project_seq
                 FROM messages m
                 JOIN principals p ON p.id = m.sender_id
+                LEFT JOIN messages parent ON parent.seq = m.in_reply_to
                 JOIN inbox i ON i.message_seq = m.seq
                 WHERE i.recipient_id = ? AND m.kind = 'pm_request'
                   AND NOT EXISTS (
@@ -1235,8 +1246,10 @@ class DispatchDB:
         with self._lock:
             rows = self._connection.execute(
                 """
-                SELECT m.*, p.display_name AS sender_name
+                SELECT m.*, p.display_name AS sender_name,
+                              parent.project_seq AS in_reply_to_project_seq
                 FROM messages m JOIN principals p ON p.id = m.sender_id
+                       LEFT JOIN messages parent ON parent.seq = m.in_reply_to
                 WHERE m.workspace_id = ? AND m.kind = 'pm_request'
                   AND NOT EXISTS (
                     SELECT 1 FROM messages answer

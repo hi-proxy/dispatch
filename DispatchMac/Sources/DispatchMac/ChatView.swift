@@ -1052,7 +1052,7 @@ private struct MessageRow: View {
 
     private var contextMetadata: some View {
         HStack(spacing: 6) {
-            if let parent = message.inReplyTo {
+            if let parent = message.inReplyToProjectSeq ?? message.inReplyTo {
                 Text("↳ #\(parent)").font(.caption2).foregroundStyle(.tertiary)
             }
             if let track = message.track {

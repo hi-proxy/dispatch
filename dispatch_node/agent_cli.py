@@ -248,7 +248,8 @@ def compact_history(project_id: str, messages: list[dict]) -> dict:
                 "body": message["body"],
                 "kind": message["kind"],
                 "reply_level": message["reply_level"],
-                "in_reply_to": message.get("in_reply_to"),
+                "in_reply_to": message.get("in_reply_to_project_seq")
+                or message.get("in_reply_to"),
                 "track": message.get("track"),
                 "tags": message.get("tags", []),
             }
