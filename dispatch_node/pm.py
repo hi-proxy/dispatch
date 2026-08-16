@@ -122,6 +122,33 @@ class PMClient:
         binding = self.registry.binding(identity)
         return binding["principal_id"] if binding else identity
 
+    def _reference_id(self, identity: str) -> str:
+        """참조 대상을 principal ID로 바꾼다.
+
+        세션 로컬 이름과 역할 이름을 모두 받는다. 예전에는 못 찾으면 입력값을
+        그대로 서버에 넘겨 FOREIGN KEY 오류로 떨어졌다. 에이전트에게는 왜
+        거절됐는지 알 길이 없는 메시지라, 여기서 막고 이유를 말한다.
+        """
+        binding = self.registry.binding(identity)
+        if binding:
+            return str(binding["principal_id"])
+        for role in self.roles():
+            if role["id"] == identity or role["name"] == identity:
+                agent_id = role.get("agent_id")
+                if agent_id:
+                    return str(agent_id)
+                raise PMServerError(
+                    f"role has no assignee to reference: {identity}"
+                )
+        known = {str(target["principal_id"]) for target in self._targets}
+        known.add(str(self.pm_id))
+        if identity in known:
+            return identity
+        raise PMServerError(
+            f"reference not found: {identity}. "
+            "use a role name, a session local name, or a principal id"
+        )
+
     def _role_id(self, identity: str) -> str:
         matches = [
             role for role in self.roles()
@@ -238,7 +265,7 @@ class PMClient:
                     self._recipient_id(recipient_id) for recipient_id in recipient_ids
                 ],
                 "reference_ids": [
-                    self._recipient_id(reference_id)
+                    self._reference_id(reference_id)
                     for reference_id in (reference_ids or [])
                 ],
                 "role_ids": [self._role_id(role_id) for role_id in (role_ids or [])],
@@ -283,7 +310,7 @@ class PMClient:
                 "kind": kind,
                 "reply_level": reply_level,
                 "reference_ids": [
-                    self._recipient_id(reference_id)
+                    self._reference_id(reference_id)
                     for reference_id in (reference_ids or [])
                 ],
                 "in_reply_to": in_reply_to,
