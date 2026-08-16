@@ -84,14 +84,15 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
             "usage": {
                 "inbox": "dispatch inbox",
                 "history": "dispatch history 20",
-                "reply_pm": 'dispatch reply "내용"',
-                "message_role": 'dispatch reply --role 역할명 "내용"',
-                "request_review": 'dispatch request --level r2 "내용"',
-                "request_approval": 'dispatch request --level r3 "내용"',
-                "work_start": 'dispatch work start "작업명"',
-                "work_report": 'dispatch work report "진행 내용"',
-                "work_done": 'dispatch work done "완료 결과"',
-                "recovery": "inbox 출력 처리 실패 시 dispatch history 20",
+                "reply_pm": 'dispatch reply "..."',
+                "message_role": 'dispatch reply --role ROLE "..."',
+                "copy_role": 'dispatch reply --ref ROLE "..."',
+                "request_review": 'dispatch request --level r2 "..."',
+                "request_approval": 'dispatch request --level r3 "..."',
+                "work_start": 'dispatch work start "..."',
+                "work_report": 'dispatch work report "..."',
+                "work_done": 'dispatch work done "..."',
+                "recovery": "if inbox output was lost, dispatch history 20",
             },
         }
     )
@@ -100,6 +101,9 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
     assert "dispatch request --level r3" in output
     assert "restore context: dispatch history 20" in output
     assert "recovery:" in output
+    assert "for_me=false means you were copied" in output
+    assert "language PM uses" in output
+    assert "Do not restate it in the terminal" in output
 
 
 def test_active_project_defaults_and_persists_per_agent(tmp_path):
@@ -175,14 +179,43 @@ def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {
         "messages": [{
-            "seq": 25, "project": "local", "from": "CTO",
-            "body": "approve", "track": None, "tags": [],
+            "seq": 25, "project": "local", "from": "CTO", "for_me": True,
+            "chain": 0, "body": "approve", "track": None, "tags": [],
         }]
     }
     assert captured.out.count("\n") == 1
     assert "Reply with:" not in captured.out
     assert "Reply with:" in captured.err
     assert "dispatch history 20" in captured.err
+    assert "copied" not in captured.err
+    assert "agent turns" not in captured.err
+
+
+def test_inbox_reports_chain_length_without_blocking(capsys):
+    emit_inbox(
+        [{
+            "seq": 40, "workspace_id": "local", "sender_id": "cto",
+            "sender_name": "CTO", "body": "재확인", "track": None, "tags": [],
+            "agent_chain": 7,
+        }]
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["messages"][0]["chain"] == 7
+    assert "7 agent turns" in captured.err
+    assert "fact to add" in captured.err
+
+
+def test_inbox_marks_reference_messages_as_listen_only(capsys):
+    emit_inbox(
+        [{
+            "seq": 26, "workspace_id": "local", "sender_id": "cto",
+            "sender_name": "CTO", "body": "PM께 보고", "track": None, "tags": [],
+            "is_reference": 1,
+        }]
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["messages"][0]["for_me"] is False
+    assert "do not reply" in captured.err
 
 
 def test_message_help_documents_tracks_tags_roles_and_inheritance(capsys):

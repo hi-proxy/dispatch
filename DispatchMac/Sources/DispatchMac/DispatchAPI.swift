@@ -76,6 +76,7 @@ struct DispatchAPI: Sendable {
 
     func send(
         projectID: String, recipientIDs: [String], roleIDs: [String] = [],
+        referenceIDs: [String] = [],
         body: String, inReplyTo: Int? = nil,
         track: String? = nil, tags: [String]? = nil,
         inheritContext: Bool = true
@@ -84,6 +85,7 @@ struct DispatchAPI: Sendable {
             let project_id: String
             let recipient_ids: [String]
             let role_ids: [String]
+            let reference_ids: [String]
             let body: String
             let in_reply_to: Int?
             let track: String?
@@ -95,6 +97,7 @@ struct DispatchAPI: Sendable {
             body: Payload(
                 project_id: projectID,
                 recipient_ids: recipientIDs, role_ids: roleIDs,
+                reference_ids: referenceIDs,
                 body: body, in_reply_to: inReplyTo,
                 track: track, tags: tags, inherit_context: inheritContext
             ),

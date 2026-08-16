@@ -6,6 +6,8 @@ final class AppModel: ObservableObject {
     @Published var snapshot = DispatchSnapshot.empty
     @Published var selectedTargets: Set<String> = []
     @Published var selectedRoles: Set<String> = []
+    /// 듣기만 하는 자리. 수신자로 넣으면 받는 쪽이 지시로 읽고 조사에 들어간다.
+    @Published var referenceRoles: Set<String> = []
     @Published var isConnected = false
     @Published var errorMessage: String?
     @Published var isMutating = false
@@ -83,6 +85,7 @@ final class AppModel: ObservableObject {
 
     func send(
         _ body: String, to recipients: [String], roles: [String] = [],
+        references: [String] = [],
         inReplyTo: Int? = nil,
         track: String? = nil, tags: [String]? = nil,
         inheritContext: Bool = true
@@ -90,11 +93,17 @@ final class AppModel: ObservableObject {
         await mutate {
             try await api.send(
                 projectID: selectedProjectID,
-                recipientIDs: recipients, roleIDs: roles, body: body,
+                recipientIDs: recipients, roleIDs: roles,
+                referenceIDs: references, body: body,
                 inReplyTo: inReplyTo,
                 track: track, tags: tags, inheritContext: inheritContext
             )
         }
+    }
+
+    /// 참조로 고른 역할의 principal. 배정되지 않은 역할은 보낼 곳이 없다.
+    var selectedReferenceIDs: [String] {
+        snapshot.roles.filter { referenceRoles.contains($0.id) }.compactMap(\.agentID)
     }
 
     func createRole(name: String, onboardingPrompt: String) async -> Bool {
@@ -241,6 +250,7 @@ final class AppModel: ObservableObject {
         }
         selectedTargets.removeAll()
         selectedRoles.removeAll()
+        referenceRoles.removeAll()
         // 옛 프로젝트 스트림은 서버가 다음 snapshot을 보낼 때까지 스스로 끝나지
         // 않는다. 끊어야 run 루프가 새 프로젝트로 곧바로 다시 붙는다.
         switchingProject = true
@@ -387,6 +397,7 @@ final class AppModel: ObservableObject {
         selectedTargets.formIntersection(available)
         let availableRoles = Set(fresh.roles.map(\.id))
         selectedRoles.formIntersection(availableRoles)
+        referenceRoles.formIntersection(availableRoles)
         // 역할은 이 프로젝트 소속이라 자동으로 골라도 안전하다. 세션 목록은
         // 전역이므로 자동으로 고르면 다른 방 담당에게 발송될 수 있다.
         if selectedTargets.isEmpty, selectedRoles.isEmpty,

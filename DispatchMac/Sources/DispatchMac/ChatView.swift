@@ -442,9 +442,13 @@ struct ChatView: View {
             model.selectedTargets.contains($0.id)
         }
         let names = roleNames + selected.map(\.displayName)
-        if names.isEmpty { return "Select recipients" }
-        if names.count == 1 { return names[0] }
-        return "\(names.count) recipients"
+        let copied = model.snapshot.roles.filter {
+            model.referenceRoles.contains($0.id)
+        }.map(\.name)
+        let suffix = copied.isEmpty ? "" : "  ·  cc: " + copied.joined(separator: ", ")
+        if names.isEmpty { return "Select recipients" + suffix }
+        if names.count == 1 { return names[0] + suffix }
+        return "\(names.count) recipients" + suffix
     }
 }
 
@@ -549,22 +553,30 @@ private struct ChatComposer: View {
                 .padding(.horizontal, 8).padding(.vertical, 6)
                 .background(Color.purple.opacity(0.09), in: Capsule())
                 ForEach(model.snapshot.roles) { role in
-                    Button { toggleRole(role.id) } label: {
+                    let isReference = model.referenceRoles.contains(role.id)
+                    Button { cycleRole(role) } label: {
                         HStack(spacing: 5) {
                             RoleAvatar(role: role, size: 22)
                             Text(role.name).font(.caption.bold()).lineLimit(1)
-                            Circle()
-                                .fill(role.assigned && role.sessionConnected ? .green : .orange)
-                                .frame(width: 7, height: 7)
+                            if isReference {
+                                Text("CC").font(.system(size: 9, weight: .heavy))
+                                    .foregroundStyle(.blue)
+                            } else {
+                                Circle()
+                                    .fill(role.assigned && role.sessionConnected ? .green : .orange)
+                                    .frame(width: 7, height: 7)
+                            }
                         }
                         .padding(.horizontal, 8).padding(.vertical, 6)
                     }
                     .buttonStyle(.plain)
                     .background(
-                        model.selectedRoles.contains(role.id)
-                            ? Color.accentColor.opacity(0.16)
-                            : Color.secondary.opacity(0.07),
-                        in: Capsule()
+                        chipTint(role), in: Capsule()
+                    )
+                    .help(
+                        isReference
+                            ? "참조 — 읽지만 답하지 않는다"
+                            : "누를 때마다 수신 → 참조 → 해제"
                     )
                 }
                 directSessionMenu
@@ -616,9 +628,23 @@ private struct ChatComposer: View {
         model.snapshot.targets.filter { model.selectedTargets.contains($0.id) }.count
     }
 
-    private func toggleRole(_ id: String) {
-        if model.selectedRoles.contains(id) { model.selectedRoles.remove(id) }
-        else { model.selectedRoles.insert(id) }
+    private func chipTint(_ role: WorkspaceRole) -> Color {
+        if model.selectedRoles.contains(role.id) { return .accentColor.opacity(0.16) }
+        if model.referenceRoles.contains(role.id) { return .blue.opacity(0.10) }
+        return .secondary.opacity(0.07)
+    }
+
+    /// 수신 → 참조 → 해제. 배정되지 않은 역할은 참조를 보낼 principal이 없어
+    /// 두 단계만 돈다.
+    private func cycleRole(_ role: WorkspaceRole) {
+        if model.selectedRoles.contains(role.id) {
+            model.selectedRoles.remove(role.id)
+            if role.agentID != nil { model.referenceRoles.insert(role.id) }
+        } else if model.referenceRoles.contains(role.id) {
+            model.referenceRoles.remove(role.id)
+        } else {
+            model.selectedRoles.insert(role.id)
+        }
     }
 
     private func send() async {
@@ -650,6 +676,7 @@ private struct ChatComposer: View {
             .filter { !$0.isEmpty }
         if await model.send(
             body, to: targets, roles: roles,
+            references: model.selectedReferenceIDs,
             track: track.isEmpty ? nil : track, tags: tags
         ) {
             draft = ""

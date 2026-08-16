@@ -188,15 +188,33 @@ def format_bootstrap(value: dict) -> str:
             f"- restore context: {usage['history']}",
             f"- reply PM: {usage['reply_pm']}",
             f"- message role: {usage['message_role']}",
+            # CLI는 소스를 매번 읽지만 서버는 재시작해야 바뀐다. 그 사이에
+            # 새 CLI가 옛 서버를 만나므로 없는 키로 죽지 않게 둔다.
+            "- copy role (listen only): "
+            + usage.get("copy_role", 'dispatch reply --ref ROLE "..."'),
             f"- request review/approval: {usage['request_review']} / {usage['request_approval']}",
             f"- work: {usage['work_start']} / {usage['work_report']} / {usage['work_done']}",
             f"- recovery: {usage['recovery']}",
             "Use role names as stable addresses. Report results and blockers through Dispatch.",
             # 명령 목록만으로는 언제 쓰는지 모른다. 새 세션마다 맥락 없이
-            # 시작하므로 규범을 함께 준다.
-            "위험하거나 되돌릴 수 없는 작업은 실행하기 전에 "
-            f"{usage['request_approval']}로 먼저 묻는다. "
-            "터미널 권한 확인 화면에서 기다리면 PM은 무엇을 묻는지 알 수 없다.",
+            # 시작하므로 규범을 함께 준다. 규범은 지시문이라 영어로 둔다.
+            "Ask before anything risky or irreversible: "
+            f"{usage['request_approval']}. "
+            "Waiting at the terminal permission prompt tells PM nothing.",
+            # 참조가 지시로 읽히면 서로 답장을 물고 늘어진다. 남에게 보낼 때도
+            # 받을 때도 같은 규칙이라 한 줄로 묶어 둔다.
+            "for_me=false means you were copied. Read it, do not act on it, "
+            "do not reply. Correct it only if a fact is wrong. "
+            "When someone only needs to know, copy them instead of addressing them.",
+            "chain counts agent turns since PM last spoke. It is not a limit: "
+            "keep going if it helps, stop when you have nothing to add.",
+            # 터미널에 다시 쓰면 원문과 미묘하게 달라진다. 나중에 에이전트가
+            # 떠올리는 것은 보낸 쪽이 아니라 다시 쓴 쪽이라, 기록이 둘이 된다.
+            "Sending echoes the exact stored text back to you. Do not restate "
+            "it in the terminal: it spends tokens and leaves a second, slightly "
+            "different version as what you remember saying.",
+            # 언어를 못박으면 PM이 바뀔 때마다 고쳐야 한다. PM을 따라가게 둔다.
+            "Write messages in the language PM uses.",
         ]
     )
 
@@ -284,6 +302,11 @@ def display_seq(message: dict) -> int:
     return int(value) if value is not None else int(message["seq"])
 
 
+# 프론티어 모델은 대개 2-3왕복에서 스스로 멈춘다. 그 언저리부터 알려주면
+# 유용한 왕복을 막지 않으면서 늘어지는 것만 짚어 준다.
+CHAIN_NOTICE = 5
+
+
 def emit_inbox(messages: list[dict]) -> None:
     payload = {
         "messages": [
@@ -291,6 +314,11 @@ def emit_inbox(messages: list[dict]) -> None:
                 "seq": display_seq(message),
                 "project": message.get("workspace_id"),
                 "from": message.get("sender_name", message["sender_id"]),
+                # 나에게 온 말인지 옆에서 듣는 말인지. 이 구분이 없으면 참조로
+                # 받은 것까지 지시로 읽고 조사에 들어간다.
+                "for_me": not message.get("is_reference"),
+                # PM이 마지막으로 말한 뒤 에이전트끼리 오간 횟수.
+                "chain": int(message.get("agent_chain") or 0),
                 "body": message["body"],
                 "track": message.get("track"),
                 "tags": message.get("tags", []),
@@ -301,6 +329,20 @@ def emit_inbox(messages: list[dict]) -> None:
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     if messages:
         print('Reply with: dispatch reply "YOUR MESSAGE"', file=sys.stderr)
+        if any(message.get("is_reference") for message in messages):
+            print(
+                "for_me=false means you were copied. Read it, do not act on it, "
+                "do not reply. Correct it only if a fact is wrong.",
+                file=sys.stderr,
+            )
+        chain = max(int(message.get("agent_chain") or 0) for message in messages)
+        if chain >= CHAIN_NOTICE:
+            print(
+                f"{chain} agent turns since PM last spoke. "
+                "Stop here unless you have a fact to add. "
+                "Ask PM with dispatch request if a decision is needed.",
+                file=sys.stderr,
+            )
         print(
             "If inbox output was not captured, recover with: dispatch history 20",
             file=sys.stderr,

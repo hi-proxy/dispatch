@@ -881,14 +881,15 @@ class DispatchDB:
             "usage": {
                 "inbox": "dispatch inbox",
                 "history": "dispatch history 20",
-                "reply_pm": 'dispatch reply "내용"',
-                "message_role": 'dispatch reply --role 역할명 "내용"',
-                "request_review": 'dispatch request --level r2 "내용"',
-                "request_approval": 'dispatch request --level r3 "내용"',
-                "work_start": 'dispatch work start "작업명"',
-                "work_report": 'dispatch work report "진행 내용"',
-                "work_done": 'dispatch work done "완료 결과"',
-                "recovery": "inbox 출력 처리 실패 시 dispatch history 20",
+                "reply_pm": 'dispatch reply "..."',
+                "message_role": 'dispatch reply --role ROLE "..."',
+                "copy_role": 'dispatch reply --ref ROLE "..."',
+                "request_review": 'dispatch request --level r2 "..."',
+                "request_approval": 'dispatch request --level r3 "..."',
+                "work_start": 'dispatch work start "..."',
+                "work_report": 'dispatch work report "..."',
+                "work_done": 'dispatch work done "..."',
+                "recovery": "if inbox output was lost, dispatch history 20",
             },
         }
         encoded = json.dumps(result, ensure_ascii=False, sort_keys=True).encode()
@@ -1030,6 +1031,16 @@ class DispatchDB:
                     "INSERT INTO message_references(principal_id, message_seq) VALUES (?, ?)",
                     (principal_id, message_seq),
                 )
+                # 참조도 배달한다. 배달하지 않으면 보는 사람이 참조 대신 수신자
+                # 자리에 넣게 되고, 받는 쪽은 그것을 지시로 읽는다. 읽을 수는
+                # 있되 답할 자리는 아니라는 구분이 필요해서 자리를 나눠 둔다.
+                conn.execute(
+                    "INSERT INTO inbox(recipient_id, message_seq) VALUES (?, ?)",
+                    (principal_id, message_seq),
+                )
+                events.append(
+                    self._create_delivery_event(conn, principal_id, message_seq)
+                )
             for recipient_id in unique_recipients:
                 conn.execute(
                     "INSERT INTO inbox(recipient_id, message_seq) VALUES (?, ?)",
@@ -1051,7 +1062,25 @@ class DispatchDB:
             rows = self._connection.execute(
                 """
                 SELECT m.*, p.display_name AS sender_name,
-                              parent.project_seq AS in_reply_to_project_seq
+                              parent.project_seq AS in_reply_to_project_seq,
+                              EXISTS (
+                                SELECT 1 FROM message_references r
+                                WHERE r.message_seq = m.seq
+                                  AND r.principal_id = i.recipient_id
+                              ) AS is_reference,
+                              -- 사람이 마지막으로 말한 뒤 에이전트끼리 몇 번
+                              -- 오갔는지. 막지 않고 알려만 준다. 길어진 것을
+                              -- 알면 새로 보탤 것이 없을 때 멈출 수 있다.
+                              (SELECT COUNT(*) FROM messages c
+                               WHERE c.workspace_id = m.workspace_id
+                                 AND c.seq <= m.seq
+                                 AND c.seq > COALESCE((
+                                   SELECT MAX(h.seq) FROM messages h
+                                   JOIN principals hp ON hp.id = h.sender_id
+                                   WHERE h.workspace_id = m.workspace_id
+                                     AND h.seq <= m.seq AND hp.kind = 'human'
+                                 ), 0)
+                              ) AS agent_chain
                 FROM messages m
                 JOIN inbox i ON i.message_seq = m.seq
                 JOIN principals p ON p.id = m.sender_id
@@ -1087,17 +1116,7 @@ class DispatchDB:
             result = []
             for row in reversed(rows):
                 message = dict(row)
-                recipients = self._connection.execute(
-                    """
-                    SELECT i.recipient_id, p.display_name,
-                           i.received_at, i.processed_at
-                    FROM inbox i
-                    JOIN principals p ON p.id = i.recipient_id
-                    WHERE i.message_seq = ? ORDER BY p.display_name
-                    """,
-                    (message["seq"],),
-                ).fetchall()
-                message["recipients"] = [dict(recipient) for recipient in recipients]
+                message["recipients"] = self._message_recipients(message["seq"])
                 message["references"] = self._message_references(message["seq"])
                 message["tags"] = self._message_tags(message["seq"])
                 message["role_recipients"] = self._message_roles(message["seq"])
@@ -1144,16 +1163,7 @@ class DispatchDB:
             result = []
             for row in rows:
                 message = dict(row)
-                recipients = self._connection.execute(
-                    """
-                    SELECT i.recipient_id, p.display_name,
-                           i.received_at, i.processed_at
-                    FROM inbox i JOIN principals p ON p.id = i.recipient_id
-                    WHERE i.message_seq = ? ORDER BY p.display_name
-                    """,
-                    (message["seq"],),
-                ).fetchall()
-                message["recipients"] = [dict(recipient) for recipient in recipients]
+                message["recipients"] = self._message_recipients(message["seq"])
                 message["references"] = self._message_references(message["seq"])
                 message["tags"] = self._message_tags(message["seq"])
                 message["role_recipients"] = self._message_roles(message["seq"])
@@ -1359,7 +1369,13 @@ class DispatchDB:
             SELECT i.recipient_id, p.display_name,
                    i.received_at, i.processed_at
             FROM inbox i JOIN principals p ON p.id = i.recipient_id
-            WHERE i.message_seq = ? ORDER BY p.display_name
+            WHERE i.message_seq = ?
+              AND NOT EXISTS (
+                SELECT 1 FROM message_references r
+                WHERE r.message_seq = i.message_seq
+                  AND r.principal_id = i.recipient_id
+              )
+            ORDER BY p.display_name
             """,
             (message_seq,),
         ).fetchall()
