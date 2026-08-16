@@ -740,3 +740,32 @@ def test_assignment_always_carries_the_project_id(tmp_path):
         ).json()
         assert len(delivered) == 1
         assert "dispatch init --project local" in delivered[0]["body"]
+
+
+def test_new_session_in_the_same_terminal_replaces_the_old_binding(tmp_path):
+    """창 하나에 에이전트 하나. 비켜 주지 않으면 sync 전체가 409로 막힌다."""
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        client.put(
+            "/v1/nodes/node-1", json={"id": "node-1", "display_name": "Node"}
+        )
+        for agent_id in ("agent-old", "agent-new"):
+            client.put(
+                f"/v1/principals/{agent_id}",
+                json={"id": agent_id, "kind": "agent", "display_name": agent_id},
+            )
+
+        def bind(agent_id: str, session: str):
+            return client.put(
+                f"/v1/bindings/{agent_id}",
+                json={
+                    "agent_id": agent_id, "node_id": "node-1",
+                    "agent_provider": "claude", "agent_session_id": session,
+                    "terminal_provider": "cmux", "terminal_session_id": "surface-1",
+                    "lifecycle": "idle",
+                },
+            )
+
+        assert bind("agent-old", "session-1").status_code in (200, 201)
+        # 같은 창, 새 세션. 예전에는 여기서 UNIQUE 위반으로 409가 났다.
+        assert bind("agent-new", "session-2").status_code in (200, 201)
