@@ -265,20 +265,23 @@ def permission_gate(
         except Exception:
             break
         status = current.get("status")
+        # PermissionRequest는 decision·reason으로 받는다.
+        # permissionDecision·permissionDecisionReason은 PreToolUse의 이름이라
+        # 여기서는 조용히 무시된다 — 눌러도 아무 일이 없는 것처럼 보인다.
         if status == "allowed":
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
-                    "permissionDecision": "allow",
-                    "permissionDecisionReason": "PM이 Dispatch에서 승인했다.",
+                    "decision": "allow",
+                    "reason": "PM이 Dispatch에서 승인했다.",
                 }
             }
         if status == "denied":
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PermissionRequest",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "PM이 Dispatch에서 거절했다.",
+                    "decision": "deny",
+                    "reason": "PM이 Dispatch에서 거절했다.",
                 }
             }
     try:
