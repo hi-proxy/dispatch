@@ -22,12 +22,6 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 쌓지 않는다. 터미널은 한 번에 하나만 막히므로 가장 최근 것만
-            // 보면 된다. 여럿을 쌓으면 목록이 오르내리며 화면이 튄다.
-            if let blocking = model.snapshot.permissionRequests.last {
-                permissionCard(blocking)
-                    .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 4)
-            }
 
             if !model.snapshot.attention.isEmpty {
                 ScrollView(.horizontal) {
@@ -255,37 +249,6 @@ struct ChatView: View {
     }
 
     /// 에이전트가 터미널에서 멈춰 기다리는 중이다. 무엇을 하려는지 그대로
-    /// 보여주고 여기서 답한다. 터미널로 가서 눌러도 된다.
-    private func permissionCard(_ request: PermissionRequest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: "lock.trianglebadge.exclamationmark.fill")
-                    .foregroundStyle(.orange)
-                Text(request.agentName ?? "에이전트").font(.callout.bold())
-                Text("권한 확인을 기다린다").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Text(request.toolName)
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 7).padding(.vertical, 2)
-                    .background(.quaternary.opacity(0.6), in: Capsule())
-            }
-            Text(request.summary)
-                .font(.caption.monospaced()).foregroundStyle(.secondary)
-                .lineLimit(4).textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            // 승인·거절 버튼을 두지 않는다. 이 provider에서는 명령형 hook이
-            // 결정을 돌려줄 수 없어서, 눌러도 터미널은 계속 멈춰 있다. 되는
-            // 것처럼 보이는 버튼이 제일 나쁘다.
-            Text("터미널에서 답해야 풀린다. 답이 없으면 잠시 뒤 스스로 물러난다.")
-                .font(.caption2).foregroundStyle(.tertiary)
-        }
-        .padding(12)
-        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.35))
-        )
-    }
-
     private var inspectorPanel: some View {
         VStack(spacing: 0) {
             Picker("", selection: $inspectorTab) {
@@ -519,14 +482,17 @@ private struct ChatComposer: View {
                 )
             }
             .background(.quaternary.opacity(0.28), in: RoundedRectangle(cornerRadius: 14))
-            .opacity(blockedBy == nil ? 1 : 0.45)
+            .opacity(blockedBy == nil ? 1 : 0.25)
+            // 입력창 위에 덮는다. 위쪽에 따로 자리를 내주면 화면만 먹고, 정작
+            // 막혀 있는 곳과 떨어져 있어 무엇 때문에 못 보내는지 눈에 안 들어온다.
+            .overlay {
+                if let blocked = blockedBy { permissionOverlay(blocked) }
+            }
             HStack {
-                if let blocked = blockedBy {
-                    Label(
-                        "\(blocked.agentName ?? "에이전트") 터미널이 권한 확인에서 멈춰 있다."
-                            + " 지금 보내도 읽지 못한다.",
-                        systemImage: "lock.trianglebadge.exclamationmark.fill"
-                    ).font(.caption).foregroundStyle(.orange)
+                if blockedBy != nil {
+                    // 띠가 이미 무엇 때문인지 말한다. 여기서는 결과만 말한다.
+                    Text("지금 보내도 읽지 못한다")
+                        .font(.caption).foregroundStyle(.orange)
                 } else if let mentionError {
                     Label(mentionError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption).foregroundStyle(.red)
@@ -547,8 +513,41 @@ private struct ChatComposer: View {
 
     /// 터미널이 권한 확인에서 멈춰 있으면 보내도 읽지 못한다. 그 사실을
     /// 화면이 감추면 PM은 보냈다고 믿고 기다린다.
+    ///
+    /// 쌓지 않고 최신 하나만 본다. 터미널은 한 번에 하나만 막힌다.
     private var blockedBy: PermissionRequest? {
         model.snapshot.permissionRequests.last
+    }
+
+    /// 입력창을 덮는 띠. 승인·거절 버튼을 두지 않는다 — 이 provider에서는
+    /// 명령형 hook이 결정을 돌려줄 수 없어서 눌러도 터미널은 계속 멈춰 있다.
+    /// 되는 것처럼 보이는 버튼이 제일 나쁘다.
+    private func permissionOverlay(_ request: PermissionRequest) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: "lock.trianglebadge.exclamationmark.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(request.agentName ?? "에이전트").font(.caption.bold())
+                    Text("터미널에서 답해야 풀린다")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(request.toolName)
+                        .font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(.quaternary.opacity(0.6), in: Capsule())
+                }
+                Text(request.summary)
+                    .font(.caption2.monospaced()).foregroundStyle(.secondary)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.orange.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.45))
+        )
     }
 
     private var participantSelector: some View {
