@@ -209,6 +209,18 @@ class LocalRegistry:
 
     def attach(self, local_name: str, candidate: CmuxAgentCandidate) -> dict[str, Any]:
         data = asdict(candidate)
+        # 창 하나에 에이전트 하나다. 같은 창을 다시 써서 새 세션을 띄우면 옛
+        # binding은 갈 곳이 없다. 놔두면 서버의 창 단위 유일 제약에 걸려
+        # sync가 통째로 409를 내고, 배정도 연결도 전부 막힌다. 화면에는
+        # SQLite 제약 문구가 그대로 뜬다.
+        self.connection.execute(
+            """
+            UPDATE bindings SET attached = 0,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE surface_id = ? AND local_name != ? AND attached = 1
+            """,
+            (candidate.surface_id, local_name),
+        )
         self.connection.execute(
             """
             INSERT INTO bindings(

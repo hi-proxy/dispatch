@@ -250,3 +250,26 @@ def test_surface_move_supersedes_wake_sent_to_old_terminal(tmp_path):
         (registry.binding("agent-1")["principal_id"],),
     ).fetchone()
     assert row["status"] == "superseded"
+
+
+def test_reusing_a_terminal_window_supersedes_the_old_binding(tmp_path):
+    """같은 창에 새 세션을 띄우면 옛 binding은 갈 곳이 없다.
+
+    놔두면 서버의 창 단위 유일 제약(node_id, terminal_provider,
+    terminal_session_id)에 걸려 sync가 통째로 409를 내고 배정도 연결도 막힌다.
+    8/16 실측에서 PM이 터미널 창을 재사용하자 그대로 걸렸다.
+    """
+    registry = LocalRegistry(tmp_path / "node.db")
+    old = candidate("idle")
+    registry.attach("agent-old", old)
+
+    fresh = CmuxAgentCandidate(
+        **{**old.__dict__, "agent_session_id": "session-2"}
+    )
+    registry.attach("agent-new", fresh)
+
+    live = registry.list()
+    assert [row["local_name"] for row in live] == ["agent-new"]
+    assert {row["surface_id"] for row in live} == {old.surface_id}
+    assert registry.binding("agent-old") is None
+    registry.close()
