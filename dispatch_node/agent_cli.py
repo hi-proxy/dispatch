@@ -73,6 +73,14 @@ Use role names as stable addresses; session names may change.""",
     )
     initialize.add_argument("--project", required=True)
     commands.add_parser("inbox", help="read new messages for this agent")
+    gate = commands.add_parser(
+        "permission-gate",
+        help="hand a PermissionRequest hook payload to the PM and wait for the answer",
+    )
+    gate.add_argument(
+        "--wait", type=int, default=110,
+        help="seconds to wait before stepping aside so the terminal handles it",
+    )
     history = commands.add_parser("history", help="read shared project history")
     history.add_argument("count", nargs="?", type=int, default=20)
     history.add_argument("--after", type=int)
@@ -191,6 +199,75 @@ def format_bootstrap(value: dict) -> str:
             "터미널 권한 확인 화면에서 기다리면 PM은 무엇을 묻는지 알 수 없다.",
         ]
     )
+
+
+def permission_gate(
+    config: dict, registry: LocalRegistry, binding: dict, wait_seconds: int
+) -> dict:
+    """권한 요청을 PM에게 넘기고 답을 기다린다.
+
+    터미널에는 아무것도 넣지 않는다. hook이 stdin으로 준 것을 그대로 서버에
+    올리고, PM이 앱에서 누른 답을 hook 응답으로 돌려준다.
+
+    답이 없으면 아무 판단도 하지 않고 비켜선다. 그러면 평소처럼 터미널에서
+    사람이 처리한다. 기다리다 못해 대신 승인하는 일은 하지 않는다.
+    """
+    import time
+
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        return {}
+    tool_name = payload.get("tool_name")
+    session_id = payload.get("session_id")
+    if not tool_name or not session_id:
+        return {}
+
+    workspace_id = active_project(registry, binding["principal_id"])
+    client = PMClient(config["server"], registry, workspace_id=workspace_id)
+    try:
+        created = client.create_permission_request(
+            session_id=session_id,
+            agent_id=binding.get("principal_id"),
+            tool_name=str(tool_name),
+            tool_input=json.dumps(payload.get("tool_input"), ensure_ascii=False),
+            suggestions=json.dumps(
+                payload.get("permission_suggestions"), ensure_ascii=False
+            ),
+        )
+    except Exception:
+        return {}
+
+    request_id = created["id"]
+    deadline = time.monotonic() + max(0, wait_seconds)
+    while time.monotonic() < deadline:
+        time.sleep(1.5)
+        try:
+            current = client.permission_request(request_id)
+        except Exception:
+            break
+        status = current.get("status")
+        if status == "allowed":
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "PM이 Dispatch에서 승인했다.",
+                }
+            }
+        if status == "denied":
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PermissionRequest",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "PM이 Dispatch에서 거절했다.",
+                }
+            }
+    try:
+        client.resolve_permission_request(request_id, "expired")
+    except Exception:
+        pass
+    return {}
 
 
 def active_project(registry: LocalRegistry, principal_id: str) -> str:
@@ -333,6 +410,8 @@ def main() -> None:
                     separators=(",", ":"),
                 )
             )
+        elif args.command == "permission-gate":
+            print(json.dumps(permission_gate(config, registry, binding, args.wait)))
         elif args.command == "reply":
             workspace_id = args.project or active_project(
                 registry, binding["principal_id"]

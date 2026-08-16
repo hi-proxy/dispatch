@@ -22,6 +22,15 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if !model.snapshot.permissionRequests.isEmpty {
+                VStack(spacing: 8) {
+                    ForEach(model.snapshot.permissionRequests) { request in
+                        permissionCard(request)
+                    }
+                }
+                .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 4)
+            }
+
             if !model.snapshot.attention.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {
@@ -245,6 +254,43 @@ struct ChatView: View {
             }
             Spacer(minLength: 0)
         }
+    }
+
+    /// 에이전트가 터미널에서 멈춰 기다리는 중이다. 무엇을 하려는지 그대로
+    /// 보여주고 여기서 답한다. 터미널로 가서 눌러도 된다.
+    private func permissionCard(_ request: PermissionRequest) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 7) {
+                Image(systemName: "lock.trianglebadge.exclamationmark.fill")
+                    .foregroundStyle(.orange)
+                Text(request.agentName ?? "에이전트").font(.callout.bold())
+                Text("권한 확인을 기다린다").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Text(request.toolName)
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(.quaternary.opacity(0.6), in: Capsule())
+            }
+            Text(request.summary)
+                .font(.caption.monospaced()).foregroundStyle(.secondary)
+                .lineLimit(4).textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack {
+                Spacer()
+                Button("거절") {
+                    Task { await model.resolvePermission(request, allow: false) }
+                }
+                Button("승인") {
+                    Task { await model.resolvePermission(request, allow: true) }
+                }
+                .buttonStyle(.borderedProminent).tint(.orange)
+            }
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.35))
+        )
     }
 
     private var inspectorPanel: some View {

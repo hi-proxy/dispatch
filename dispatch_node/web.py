@@ -37,6 +37,11 @@ class MessagePayload(BaseModel):
     inherit_context: bool = True
 
 
+class PermissionDecision(BaseModel):
+    project_id: str = "local"
+    status: str = Field(pattern="^(allowed|denied)$")
+
+
 class RolePayload(BaseModel):
     project_id: str = "local"
     name: str = Field(min_length=1, max_length=80)
@@ -222,6 +227,7 @@ def create_web_app(
                 "work": pm.work_items(),
                 "roles": roles,
                 "agents": agents,
+                "permission_requests": pm.pending_permission_requests(),
             }
 
     @app.get("/")
@@ -446,6 +452,13 @@ def create_web_app(
                 pm.delete_shared(key)
         except Exception as error:
             raise fail(error) from error
+
+    @app.post("/api/permission-requests/{request_id}/resolve")
+    def resolve_permission(request_id: str, payload: PermissionDecision) -> dict:
+        with client(payload.project_id) as pm:
+            return pm.resolve_permission_request(
+                request_id, payload.status, resolved_by=str(pm.pm_id)
+            )
 
     @app.get("/api/projects")
     def projects() -> list[dict]:

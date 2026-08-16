@@ -104,3 +104,17 @@ class WorkStart(BaseModel):
 
 class WorkUpdate(BaseModel):
     report: str = Field(min_length=1, max_length=20000)
+
+
+class PermissionRequestCreate(BaseModel):
+    workspace_id: str
+    session_id: str = Field(min_length=1)
+    agent_id: str | None = None
+    tool_name: str = Field(min_length=1, max_length=120)
+    tool_input: str = Field(max_length=20000)
+    suggestions: str | None = Field(default=None, max_length=20000)
+
+
+class PermissionResolve(BaseModel):
+    status: str = Field(pattern="^(allowed|denied|expired)$")
+    resolved_by: str | None = None

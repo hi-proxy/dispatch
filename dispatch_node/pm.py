@@ -447,6 +447,47 @@ class PMClient:
             f"{urllib.parse.quote(bookmark_id)}",
         )
 
+    def create_permission_request(
+        self, *, session_id: str, agent_id: str | None, tool_name: str,
+        tool_input: str, suggestions: str | None,
+    ) -> dict:
+        result = self._request("POST", "/v1/permission-requests", {
+            "workspace_id": self.workspace_id,
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "tool_name": tool_name,
+            "tool_input": tool_input,
+            "suggestions": suggestions,
+        })
+        assert isinstance(result, dict)
+        return result
+
+    def permission_request(self, request_id: str) -> dict:
+        result = self._request(
+            "GET", f"/v1/permission-requests/{urllib.parse.quote(request_id)}"
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def resolve_permission_request(
+        self, request_id: str, status: str, resolved_by: str | None = None
+    ) -> dict:
+        result = self._request(
+            "PATCH", f"/v1/permission-requests/{urllib.parse.quote(request_id)}",
+            {"status": status, "resolved_by": resolved_by},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def pending_permission_requests(self) -> list[dict]:
+        result = self._request(
+            "GET",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}"
+            "/permission-requests",
+        )
+        assert isinstance(result, list)
+        return result
+
     def timeline_pins(self) -> list[dict]:
         result = self._request(
             "GET",

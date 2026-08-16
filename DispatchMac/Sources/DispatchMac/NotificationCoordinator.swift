@@ -8,6 +8,7 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
     private var latestSequence = 0
     /// 이미 알린 조작 대기 세션. 상태가 풀리면 지워 다음에 다시 알린다.
     private var announcedAwaiting: Set<String> = []
+    private var announcedPermissions: Set<String> = []
 
     func start() {
         guard !initialized else { return }
@@ -25,9 +26,31 @@ final class NotificationCoordinator: NSObject, UNUserNotificationCenterDelegate 
         }
         NSApplication.shared.dockTile.badgeLabel = actionable.isEmpty ? nil : "\(actionable.count)"
         notifyAwaitingInput(snapshot)
+        notifyPermissionRequests(snapshot)
         guard previous > 0 else { return }
         for message in snapshot.timeline where message.seq > previous {
             notify(message)
+        }
+    }
+
+    /// 권한 확인은 에이전트가 멈춰 기다리는 상태라 소리와 함께 알린다.
+    private func notifyPermissionRequests(_ snapshot: DispatchSnapshot) {
+        let ids = Set(snapshot.permissionRequests.map(\.id))
+        announcedPermissions.formIntersection(ids)
+        for request in snapshot.permissionRequests
+        where !announcedPermissions.contains(request.id) {
+            announcedPermissions.insert(request.id)
+            let content = UNMutableNotificationContent()
+            content.title = "권한 확인을 기다립니다"
+            content.subtitle = request.agentName ?? request.toolName
+            content.body = request.summary
+            content.sound = .default
+            UNUserNotificationCenter.current().add(
+                UNNotificationRequest(
+                    identifier: "dispatch-permission-\(request.id)",
+                    content: content, trigger: nil
+                )
+            )
         }
     }
 

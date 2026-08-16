@@ -19,6 +19,17 @@ struct DispatchAPI: Sendable {
         self.baseURL = baseURL
     }
 
+    func resolvePermission(
+        requestID: String, projectID: String, status: String
+    ) async throws {
+        struct Payload: Encodable { let project_id: String; let status: String }
+        let _: EmptyResponse = try await request(
+            "api/permission-requests/\(encoded(requestID))/resolve", method: "POST",
+            body: Payload(project_id: projectID, status: status),
+            acceptsAnyObject: true
+        )
+    }
+
     func state(projectID: String = "local") async throws -> DispatchSnapshot {
         try await request("api/state?project_id=\(encoded(projectID))")
     }

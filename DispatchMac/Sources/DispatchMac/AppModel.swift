@@ -210,6 +210,15 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(readSeq, forKey: "readSeq")
     }
 
+    func resolvePermission(_ request: PermissionRequest, allow: Bool) async {
+        _ = await mutate {
+            try await api.resolvePermission(
+                requestID: request.id, projectID: selectedProjectID,
+                status: allow ? "allowed" : "denied"
+            )
+        }
+    }
+
     func selectProject(_ id: String) {
         guard id != selectedProjectID else { return }
         timelineCache[selectedProjectID] = (Array(snapshot.timeline.suffix(10)), hasOlderMessages)

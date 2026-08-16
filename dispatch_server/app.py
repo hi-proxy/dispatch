@@ -18,6 +18,8 @@ from .schemas import (
     SharedValueUpsert,
     TimelinePinCreate,
     WorkStart, WorkUpdate,
+    PermissionRequestCreate,
+    PermissionResolve,
 )
 
 
@@ -178,6 +180,39 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     def detach_binding(agent_id: str) -> None:
         if not db.detach_binding(agent_id):
             raise HTTPException(status_code=404, detail="active binding not found")
+
+    @app.post("/v1/permission-requests", status_code=201)
+    def create_permission_request(payload: PermissionRequestCreate) -> dict:
+        return db.create_permission_request(
+            workspace_id=payload.workspace_id,
+            session_id=payload.session_id,
+            agent_id=payload.agent_id,
+            tool_name=payload.tool_name,
+            tool_input=payload.tool_input,
+            suggestions=payload.suggestions,
+        )
+
+    @app.get("/v1/permission-requests/{request_id}")
+    def read_permission_request(request_id: str) -> dict:
+        found = db.permission_request(request_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="permission request not found")
+        return found
+
+    @app.patch("/v1/permission-requests/{request_id}")
+    def resolve_permission_request(request_id: str, payload: PermissionResolve) -> dict:
+        found = db.resolve_permission_request(
+            request_id=request_id,
+            status=payload.status,
+            resolved_by=payload.resolved_by,
+        )
+        if found is None:
+            raise HTTPException(status_code=404, detail="permission request not found")
+        return found
+
+    @app.get("/v1/workspaces/{workspace_id}/permission-requests")
+    def pending_permission_requests(workspace_id: str) -> list[dict]:
+        return db.pending_permission_requests(workspace_id)
 
     @app.post("/v1/messages", status_code=201)
     async def send_message(payload: MessageCreate) -> dict:

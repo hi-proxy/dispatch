@@ -16,13 +16,14 @@ struct DispatchSnapshot: Decodable {
     var work: [WorkItem]
     var roles: [WorkspaceRole]
     var agents: [AgentTerminal]
+    var permissionRequests: [PermissionRequest] = []
 
     static let empty = DispatchSnapshot(
         projectID: "local", projects: [], projectRepositories: [],
         pmID: "", pmProfile: .empty,
         targets: [], statuses: [], timeline: [], attention: [], bookmarks: [],
         timelinePins: [],
-        shared: [], work: [], roles: [], agents: []
+        shared: [], work: [], roles: [], agents: [], permissionRequests: []
     )
 
     enum CodingKeys: String, CodingKey {
@@ -33,6 +34,7 @@ struct DispatchSnapshot: Decodable {
         case pmProfile = "pm_profile"
         case targets, statuses, timeline, attention, bookmarks, shared, work, roles, agents
         case timelinePins = "timeline_pins"
+        case permissionRequests = "permission_requests"
     }
 }
 
@@ -408,5 +410,40 @@ extension ChatMessage {
         if recipients.allSatisfy({ $0.processedAt != nil }) { return .processed }
         if recipients.allSatisfy({ $0.receivedAt != nil }) { return .received }
         return .sent
+    }
+}
+
+
+/// 에이전트가 터미널에서 권한 확인을 받는 중이다. 무엇을 하려는지까지 hook이
+/// 알려주므로 화면을 읽지 않고도 그대로 보여줄 수 있다.
+struct PermissionRequest: Decodable, Identifiable {
+    var id: String
+    var sessionID: String
+    var agentName: String?
+    var toolName: String
+    var toolInput: String
+    var createdAt: String
+
+    /// tool_input은 JSON 문자열로 온다. 읽을 수 있게 풀어 준다.
+    var summary: String {
+        guard let data = toolInput.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data)
+        else { return toolInput }
+        if let dictionary = object as? [String: Any] {
+            let parts = dictionary
+                .sorted { $0.key < $1.key }
+                .map { "\($0.key): \($0.value)" }
+            return parts.joined(separator: "\n")
+        }
+        return toolInput
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case sessionID = "session_id"
+        case agentName = "agent_name"
+        case toolName = "tool_name"
+        case toolInput = "tool_input"
+        case createdAt = "created_at"
     }
 }

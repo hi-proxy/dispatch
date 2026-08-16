@@ -86,6 +86,21 @@ CREATE TABLE IF NOT EXISTS message_references (
     PRIMARY KEY (principal_id, message_seq)
 );
 
+CREATE TABLE IF NOT EXISTS permission_requests (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    agent_id TEXT REFERENCES principals(id),
+    tool_name TEXT NOT NULL,
+    tool_input TEXT NOT NULL,
+    suggestions TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'allowed', 'denied', 'expired')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    resolved_at TEXT,
+    resolved_by TEXT REFERENCES principals(id)
+);
+
 CREATE TABLE IF NOT EXISTS message_tags (
     message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
     tag TEXT NOT NULL,
@@ -359,6 +374,71 @@ class DispatchDB:
                 "SELECT * FROM principals WHERE id = ?", (principal_id,)
             ).fetchone()
         return dict(row)
+
+    def create_permission_request(
+        self, *, workspace_id: str, session_id: str, agent_id: str | None,
+        tool_name: str, tool_input: str, suggestions: str | None,
+    ) -> dict[str, Any]:
+        request_id = str(uuid.uuid4())
+        with self.transaction() as conn:
+            conn.execute(
+                """INSERT INTO permission_requests(
+                       id, workspace_id, session_id, agent_id,
+                       tool_name, tool_input, suggestions
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    request_id, workspace_id, session_id, agent_id,
+                    tool_name, tool_input, suggestions,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM permission_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+        return dict(row)
+
+    def permission_request(self, request_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                """SELECT r.*, p.display_name AS agent_name
+                   FROM permission_requests r
+                   LEFT JOIN principals p ON p.id = r.agent_id
+                   WHERE r.id = ?""",
+                (request_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def pending_permission_requests(self, workspace_id: str) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT r.*, p.display_name AS agent_name
+                   FROM permission_requests r
+                   LEFT JOIN principals p ON p.id = r.agent_id
+                   WHERE r.workspace_id = ? AND r.status = 'pending'
+                   ORDER BY r.created_at ASC""",
+                (workspace_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def resolve_permission_request(
+        self, *, request_id: str, status: str, resolved_by: str | None,
+    ) -> dict[str, Any] | None:
+        if status not in ("allowed", "denied", "expired"):
+            raise ValueError(f"unknown status: {status}")
+        with self.transaction() as conn:
+            # 이미 답이 나온 요청은 덮어쓰지 않는다. 사람이 누른 답과 시간
+            # 초과가 겹쳤을 때 먼저 온 쪽을 지킨다.
+            conn.execute(
+                """UPDATE permission_requests
+                   SET status = ?,
+                       resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+                       resolved_by = ?
+                   WHERE id = ? AND status = 'pending'""",
+                (status, resolved_by, request_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM permission_requests WHERE id = ?", (request_id,)
+            ).fetchone()
+        return dict(row) if row else None
 
     def global_seq(self, *, workspace_id: str, project_seq: int) -> int | None:
         """방별 표시 번호를 전역 seq로 되돌린다. 경계에서만 쓴다."""
