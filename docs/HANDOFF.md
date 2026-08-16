@@ -1,6 +1,6 @@
 # Dispatch 개발 핸드오프
 
-기준일: 2026-08-15
+기준일: 2026-08-16
 상태: 로컬 실사용 가능한 SwiftUI 개발 빌드
 
 제품 명세: [PRODUCT_SPEC.md](PRODUCT_SPEC.md)
@@ -10,7 +10,7 @@
 
 - 원격 저장소: 없음
 - 기준 branch: `main`
-- 구현 기준 commit: `944890a` (`perf: stack the chat timeline in reverse`)
+- 구현 기준 commit: `1ae8c64` (`chore: drop the probe scripts now that the gate exists`)
 - 런타임 DB, `.venv`, Swift 빌드 산출물, 로컬 권한 설정은 Git에서 제외
 
 ## 제품 경계
@@ -77,6 +77,13 @@ Selected Project
   메시지를 다시 재지 않는다
 - 방을 떠나도 최신 10건을 보관해 재진입 시 네트워크를 기다리지 않는 방별 캐시
 - 프로젝트 전환 시 옛 스트림을 끊고 곧바로 새 방에 다시 붙는 재연결
+- 방마다 1부터 세는 표시 번호. 저장과 정렬은 전역 seq를 쓰고 사람과 에이전트가
+  부르는 번호만 방별로 보여준다
+- 목록과 상세로 나눈 Agents 패널
+- 새 메시지가 온 방에 점을 켜는 사이드바 표시
+- 빈 프롬프트가 아닌 채 멈춘 세션을 표시하고 알리는 조작 대기 감지
+- 권한 요청을 PM 앱에서 승인·거절하는 경로. 무엇을 요청하는지 도구와 입력을
+  그대로 보여주며 터미널에는 아무것도 넣지 않는다 (아직 hook 등록 전)
 
 ## 실행
 
@@ -112,6 +119,21 @@ open DispatchMac/build/Dispatch.app
 ## 검증
 
 현재 착지 시점에 다음을 통과했다.
+
+### 에이전트 신호와 화면 파싱
+
+에이전트 도구가 세션 신호를 직접 주면 그것을 쓴다. 화면을 읽어 상태를 추론하는
+규칙은 provider와 버전에 따라 조용히 깨지고, 깨졌다는 것을 아무도 모른다. 지금
+`prompt_ready`가 강건한 이유는 "빈 프롬프트인가"만 보기 때문이며, 더 읽으려 할수록
+약해진다.
+
+이 저장소에서 확인한 것은 다음과 같다.
+
+- 세션 발견: hook의 `session_id`·`cwd`·`transcript_path`
+- 세션과 창의 연결: `ps`에 나오는 `--session-id`로 tty를 찾는다
+- 무엇을 기다리는지: `PermissionRequest` hook이 도구 이름과 입력을 준다
+- 에이전트에게 전하기: stop hook의 `hookSpecificOutput.additionalContext`.
+  `decision: block`은 화면에 오류로 뜨고 `systemMessage`는 컨텍스트에 닿지 않는다
 
 ### UI 성능 원칙
 
@@ -188,6 +210,11 @@ DispatchMac/build-app.sh
   UI 쪽은 행 구조가 이미 이를 받을 수 있다.
 - 방 전환에 남은 374ms. 후보는 매 렌더마다 전체를 순회하는 `filteredTimeline`·
   `contexts`·`bookmarkedSequences`와 `MessagePrettyPrinter`의 재파싱이다.
+- 터미널 어댑터 분리. cmux 의존이 `dispatch_node/cmux.py`에 모여 있으나 인터페이스로
+  갈라져 있지는 않다. 경계를 그으면 일반 터미널 지원과 M3 Windows 어댑터 자리가
+  같이 생기고, 파싱 규칙이 어댑터별 책임이 된다.
+- 권한 승인을 켜는 일. 서버 재시작과 앱 재빌드, `PermissionRequest` hook 등록이
+  필요하다. hook 등록은 사용자 설정을 건드리므로 범위를 정해야 한다.
 - 빈 방 표시(`No messages`)는 프로젝트 삭제가 보류 범위라 실증하지 못했다.
   방향 의존을 코드에서 없애 두었으므로 새 프로젝트를 만들 일이 생기면 함께
   확인한다.
