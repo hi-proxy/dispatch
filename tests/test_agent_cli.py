@@ -233,3 +233,35 @@ def test_write_error_points_to_init_and_history_recovery():
     message = write_error_message(RuntimeError("server 409: role unavailable"))
     assert "dispatch init --project PROJECT_ID" in message
     assert "dispatch history 20" in message
+
+
+def test_reference_accepts_the_assignee_principal(monkeypatch):
+    """앱의 CC 칩은 역할이 아니라 담당자 principal을 보낸다.
+
+    이걸 못 알아보면 마지막 방어선(_targets)까지 흘러가는데, 그건
+    sync_connections에서만 채워지고 앱의 발송 경로는 그걸 부르지 않아 늘
+    비어 있다. 8/16 실측에서 CC가 통째로 'reference not found'로 막혔다.
+    """
+    class FakeRegistry:
+        def pm_principal_id(self): return "pm-node"
+        def node_id(self): return "node-test"
+        def binding(self, identity): return None
+
+    captured = {}
+
+    def request(self, method, path, payload=None):
+        if path.endswith("/roles"):
+            return [{
+                "id": "role-1", "name": "a1",
+                "agent_id": "agent-local-claude-abc123",
+            }]
+        captured.update(payload or {})
+        return {"seq": 1}
+
+    monkeypatch.setattr(PMClient, "_request", request)
+    client = PMClient("http://127.0.0.1:8787", FakeRegistry())
+    client.send_many(
+        ["pm-node"], "보고",
+        reference_ids=["agent-local-claude-abc123"],
+    )
+    assert captured["reference_ids"] == ["agent-local-claude-abc123"]

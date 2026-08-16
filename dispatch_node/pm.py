@@ -140,6 +140,12 @@ class PMClient:
                 raise PMServerError(
                     f"role has no assignee to reference: {identity}"
                 )
+            # 앱의 CC 칩은 역할이 아니라 그 역할 담당자의 principal을 보낸다.
+            # 이걸 못 알아보면 마지막 방어선까지 흘러가는데, 거기 쓰는
+            # _targets는 sync_connections에서만 채워지고 앱의 발송 경로는
+            # 그걸 부르지 않아 늘 비어 있다. 그래서 CC가 통째로 막혔다.
+            if identity and role.get("agent_id") == identity:
+                return str(identity)
         known = {str(target["principal_id"]) for target in self._targets}
         known.add(str(self.pm_id))
         if identity in known:
