@@ -205,6 +205,11 @@ def format_bootstrap(value: dict) -> str:
             "When someone only needs to know, copy them instead of addressing them.",
             "chain counts agent turns since PM last spoke. It is not a limit: "
             "keep going if it helps, stop when you have nothing to add.",
+            # 터미널에 다시 쓰면 원문과 미묘하게 달라진다. 나중에 에이전트가
+            # 떠올리는 것은 보낸 쪽이 아니라 다시 쓴 쪽이라, 기록이 둘이 된다.
+            "Sending echoes the exact stored text back to you. Do not restate "
+            "it in the terminal: it spends tokens and leaves a second, slightly "
+            "different version as what you remember saying.",
             # 언어를 못박으면 PM이 바뀔 때마다 고쳐야 한다. PM을 따라가게 둔다.
             "Write messages in the language PM uses.",
         ]

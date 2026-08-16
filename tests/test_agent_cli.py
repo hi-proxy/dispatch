@@ -103,6 +103,7 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
     assert "recovery:" in output
     assert "for_me=false means you were copied" in output
     assert "language PM uses" in output
+    assert "Do not restate it in the terminal" in output
 
 
 def test_active_project_defaults_and_persists_per_agent(tmp_path):
