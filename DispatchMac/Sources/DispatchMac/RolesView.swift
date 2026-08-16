@@ -19,11 +19,8 @@ struct RolesView: View {
                     Button("Initialize", systemImage: "sparkles") {
                         Task { await model.initializeChat() }
                     }
-                    .disabled(
-                        model.isMutating
-                            || (model.selectedTargets.isEmpty && model.selectedRoles.isEmpty)
-                    )
-                    .help("Send the Dispatch usage guide to the selected recipients")
+                    .disabled(model.isMutating || !model.snapshot.roles.contains(where: \.assigned))
+                    .help("담당자가 배정된 모든 역할에게 Dispatch 사용법을 보낸다")
                 }
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {

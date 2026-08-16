@@ -138,18 +138,19 @@ final class AppModel: ObservableObject {
         _ = await mutate { try await api.deleteShared(projectID: selectedProjectID, key: key) }
     }
 
-    /// 선택한 수신자에게 짧은 `dispatch init` 호출문만 보낸다. 사용법 본문은
-    /// 에이전트가 bootstrap API에서 읽는다.
+    /// 이 프로젝트의 담당자가 배정된 역할 전부에 짧은 `dispatch init` 호출문을
+    /// 보낸다. 사용법 본문은 에이전트가 bootstrap API에서 읽는다.
+    ///
+    /// 채팅 입력창의 수신자 선택과 엮지 않는다. 그쪽은 대화 맥락이라 수시로
+    /// 바뀌는데 이건 셋업 행위다. 엮어 두면 대화하려고 고른 상대에게 셋업
+    /// 메시지가 나간다.
     func initializeChat() async {
-        let targets = snapshot.targets
-            .filter { selectedTargets.contains($0.id) }
-            .map(\.id)
-        let roles = Array(selectedRoles)
-        guard !targets.isEmpty || !roles.isEmpty else { return }
+        let roles = snapshot.roles.filter(\.assigned).map(\.id)
+        guard !roles.isEmpty else { return }
         _ = await send(
             "[dispatch:init] 사용법과 현재 역할 구성을 불러오세요: "
                 + "dispatch init --project \(selectedProjectID)",
-            to: targets,
+            to: [],
             roles: roles,
             tags: ["dispatch-init"],
             inheritContext: false
@@ -187,8 +188,9 @@ final class AppModel: ObservableObject {
     func createProject(name: String) async -> Bool {
         do {
             let project = try await api.createProject(name: name)
-            selectedProjectID = project.id
-            await refresh()
+            // 직접 대입하면 수신자 선택과 스트림이 이전 방에 남는다.
+            // 방 전환 경로를 그대로 탄다.
+            selectProject(project.id)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -319,12 +321,11 @@ final class AppModel: ObservableObject {
         selectedTargets.formIntersection(available)
         let availableRoles = Set(fresh.roles.map(\.id))
         selectedRoles.formIntersection(availableRoles)
+        // 역할은 이 프로젝트 소속이라 자동으로 골라도 안전하다. 세션 목록은
+        // 전역이므로 자동으로 고르면 다른 방 담당에게 발송될 수 있다.
         if selectedTargets.isEmpty, selectedRoles.isEmpty,
            let firstRole = fresh.roles.first?.id {
             selectedRoles.insert(firstRole)
-        } else if selectedTargets.isEmpty, selectedRoles.isEmpty,
-                  let first = fresh.targets.first?.id {
-            selectedTargets.insert(first)
         }
         isConnected = true
         errorMessage = nil
