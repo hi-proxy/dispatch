@@ -341,9 +341,16 @@ class DispatchDB:
         return dict(row)
 
     def projects(self) -> list[dict[str, Any]]:
+        # last_message_seq는 방마다 어디까지 왔는지 알리는 파생값이다. 읽음
+        # 여부는 클라이언트가 자기 커서와 대조해 판단한다.
         with self._lock:
             rows = self._connection.execute(
-                "SELECT * FROM projects WHERE archived_at IS NULL ORDER BY created_at, name"
+                """SELECT p.*,
+                          (SELECT MAX(seq) FROM messages m WHERE m.workspace_id = p.id)
+                              AS last_message_seq
+                   FROM projects p
+                   WHERE p.archived_at IS NULL
+                   ORDER BY p.created_at, p.name"""
             ).fetchall()
         return [dict(row) for row in rows]
 

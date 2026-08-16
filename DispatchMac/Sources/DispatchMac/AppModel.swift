@@ -27,6 +27,11 @@ final class AppModel: ObservableObject {
     /// 방을 나가도 읽어둔 메시지를 버리지 않는다. 다시 들어올 때 네트워크를
     /// 기다리지 않고 곧바로 같은 자리를 보여주기 위한 것이다.
     private var timelineCache: [String: (messages: [ChatMessage], hasOlder: Bool)] = [:]
+    /// 방마다 어디까지 봤는지. 서버가 주는 last_message_seq와 대조해 안읽음을
+    /// 판단한다. 지금은 PM이 이 기기 한 대뿐이라 로컬에 둔다. 여러 기기에서
+    /// 같은 상태를 봐야 하면 서버로 옮겨야 한다.
+    @Published private var readSeq: [String: Int] =
+        UserDefaults.standard.dictionary(forKey: "readSeq") as? [String: Int] ?? [:]
 
     init() {
         NotificationCoordinator.shared.start()
@@ -192,6 +197,19 @@ final class AppModel: ObservableObject {
         )
     }
 
+    /// 지금 열어 둔 방은 항상 읽은 것으로 본다.
+    func hasUnread(_ project: DispatchProject) -> Bool {
+        guard let last = project.lastMessageSeq else { return false }
+        guard project.id != selectedProjectID else { return false }
+        return last > (readSeq[project.id] ?? 0)
+    }
+
+    private func markRead(_ projectID: String, upTo seq: Int) {
+        guard readSeq[projectID] ?? 0 < seq else { return }
+        readSeq[projectID] = seq
+        UserDefaults.standard.set(readSeq, forKey: "readSeq")
+    }
+
     func selectProject(_ id: String) {
         guard id != selectedProjectID else { return }
         timelineCache[selectedProjectID] = (Array(snapshot.timeline.suffix(10)), hasOlderMessages)
@@ -351,6 +369,9 @@ final class AppModel: ObservableObject {
         }
         snapshot = fresh
         isLoadingTimeline = false
+        if let seq = fresh.projects.first(where: { $0.id == fresh.projectID })?.lastMessageSeq {
+            markRead(fresh.projectID, upTo: seq)
+        }
         timelineCache[fresh.projectID] = (Array(fresh.timeline.suffix(10)), hasOlderMessages)
         NotificationCoordinator.shared.consume(freshSnapshot)
         let available = Set(fresh.targets.map(\.id))

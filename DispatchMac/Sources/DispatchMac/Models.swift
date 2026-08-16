@@ -40,9 +40,12 @@ struct DispatchProject: Decodable, Identifiable, Hashable {
     var id: String
     var name: String
     var createdAt: String
+    /// 방에 마지막으로 들어온 메시지 seq. 메시지가 없으면 nil이다.
+    var lastMessageSeq: Int?
     enum CodingKeys: String, CodingKey {
         case id, name
         case createdAt = "created_at"
+        case lastMessageSeq = "last_message_seq"
     }
 }
 

@@ -22,7 +22,8 @@ struct ContentView: View {
                             ProjectRow(
                                 project: project,
                                 repository: repository(for: project.id),
-                                selected: project.id == model.selectedProjectID
+                                selected: project.id == model.selectedProjectID,
+                                unread: model.hasUnread(project)
                             )
                         }
                         .buttonStyle(.plain)
@@ -56,7 +57,7 @@ struct ContentView: View {
                 }
         }
         .sheet(isPresented: $showAgents) {
-            AgentsView().frame(minWidth: 720, minHeight: 460)
+            AgentsView().frame(minWidth: 780, minHeight: 470)
         }
         .sheet(isPresented: $creatingProject) {
             projectEditor(title: "New project") {
@@ -184,6 +185,7 @@ private struct ProjectRow: View {
     let project: DispatchProject
     let repository: ProjectRepository?
     let selected: Bool
+    let unread: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -193,12 +195,16 @@ private struct ProjectRow: View {
                 .frame(width: 34, height: 34)
                 .background(roleAvatarColor(project.name), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
-                Text(project.name).font(.body.weight(.medium)).lineLimit(1)
+                Text(project.name)
+                    .font(.body.weight(unread ? .semibold : .medium)).lineLimit(1)
                 Text(subtitle).font(.caption)
                     .foregroundStyle(selected ? .white.opacity(0.75) : .secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            if unread {
+                Circle().fill(Color.accentColor).frame(width: 8, height: 8)
+            }
         }
         .foregroundStyle(selected ? .white : .primary)
         .padding(.horizontal, 8).padding(.vertical, 6)
