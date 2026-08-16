@@ -184,6 +184,11 @@ def format_bootstrap(value: dict) -> str:
             f"- work: {usage['work_start']} / {usage['work_report']} / {usage['work_done']}",
             f"- recovery: {usage['recovery']}",
             "Use role names as stable addresses. Report results and blockers through Dispatch.",
+            # 명령 목록만으로는 언제 쓰는지 모른다. 새 세션마다 맥락 없이
+            # 시작하므로 규범을 함께 준다.
+            "위험하거나 되돌릴 수 없는 작업은 실행하기 전에 "
+            f"{usage['request_approval']}로 먼저 묻는다. "
+            "터미널 권한 확인 화면에서 기다리면 PM은 무엇을 묻는지 알 수 없다.",
         ]
     )
 
