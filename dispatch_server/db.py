@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any, Iterator
 
 
+# 게이트의 기본 대기가 110초다. 넉넉히 잡아 그보다 오래 pending인 것은 답을
+# 받아갈 쪽이 없다고 본다.
+PERMISSION_REQUEST_TTL_SECONDS = 180
+
+
 SCHEMA = """
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -408,6 +413,20 @@ class DispatchDB:
         return dict(row) if row else None
 
     def pending_permission_requests(self, workspace_id: str) -> list[dict[str, Any]]:
+        # 묻는 쪽은 정해진 시간만 기다리다 비켜선다. 그 뒤에도 pending으로 남은
+        # 것은 답을 받아갈 프로세스가 없다는 뜻이다 — 게이트가 죽었거나 서버가
+        # 다시 떴거나 터미널이 닫혔다. 그대로 두면 PM 화면에 눌러도 아무 일도
+        # 없는 카드가 쌓인다. 읽을 때 걷어낸다. 따로 도는 것을 두지 않는다.
+        with self.transaction() as conn:
+            conn.execute(
+                """UPDATE permission_requests SET status = 'expired',
+                     resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                   WHERE workspace_id = ? AND status = 'pending'
+                     AND created_at < strftime(
+                       '%Y-%m-%dT%H:%M:%fZ', 'now', ?
+                     )""",
+                (workspace_id, f"-{PERMISSION_REQUEST_TTL_SECONDS} seconds"),
+            )
         with self._lock:
             rows = self._connection.execute(
                 """SELECT r.*, p.display_name AS agent_name
