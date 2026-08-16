@@ -13,7 +13,11 @@ enum MessagePrettyPrinter {
         var isAtLineStart = true
 
         for character in normalized {
-            if lineBreakMarkers.contains(character), !isAtLineStart {
+            // 목록 머리표일 때만 줄을 나눈다. 앞이 공백이 아니면 본문 안에
+            // 쓰인 기호다. ③①②처럼 잇달아 적거나 (③→①→②)처럼 괄호 안에
+            // 넣은 것을 쪼개면 원문이 뜻하는 바가 망가진다.
+            let followsSpace = result.last == " " || result.last == "\t"
+            if lineBreakMarkers.contains(character), !isAtLineStart, followsSpace {
                 while result.last == " " || result.last == "\t" {
                     result.removeLast()
                 }

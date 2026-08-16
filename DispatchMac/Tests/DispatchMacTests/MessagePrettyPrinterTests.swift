@@ -7,6 +7,19 @@ import Testing
     #expect(MessagePrettyPrinter.format(source) == "요약\n■첫 항목\n①세부 내용\n✓완료")
 }
 
+@Test func keepsMarkersThatSitInsideASentence() {
+    // 목록 머리표가 아니라 본문 안에 쓴 기호다. 쪼개면 뜻이 망가진다.
+    let source = "③①② 전부 태운다 — 네 권고 순서(③→①→②) 그대로."
+
+    #expect(MessagePrettyPrinter.format(source) == source)
+}
+
+@Test func stillSplitsMarkersThatFollowASpace() {
+    let source = "요약 ■ 첫 항목 ■ 둘째 항목"
+
+    #expect(MessagePrettyPrinter.format(source) == "요약\n■ 첫 항목\n■ 둘째 항목")
+}
+
 @Test func preservesExistingLinesAndLeadingMarkers() {
     let source = "■첫 줄\n②둘째 줄\n일반 문장"
 
