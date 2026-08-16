@@ -142,11 +142,10 @@ class DaemonLauncher(DemoLauncher):
     control_port: int = 8790
 
     def run(self) -> None:
-        registry = LocalRegistry(self.registry_path)
-        if not registry.list():
-            registry.close()
-            raise RuntimeError("no connected agents; connect one from Dispatch first")
-        registry.close()
+        # 연결된 에이전트가 없어도 뜬다. 앱이 이 daemon을 띄우고, 에이전트를
+        # 연결하는 길은 그 앱뿐이라, 여기서 막으면 처음 켜는 사람은 영영
+        # 아무것도 못 한다. supervisor는 빈 레지스트리를 견디고 새로 붙는
+        # 것을 2초마다 알아서 집는다.
         owned_server = self._start_server()
         stop_event = threading.Event()
         supervisor = NodeSupervisor(

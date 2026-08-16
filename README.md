@@ -28,10 +28,14 @@ SwiftUI 앱 ──▶ Node ──▶ Server
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
+.venv/bin/dispatch-node install-agent-cli
 
 DispatchMac/build-app.sh
 open DispatchMac/build/Dispatch.app
 ```
+
+`install-agent-cli`는 `~/.local/bin/dispatch`를 놓는다. 에이전트가 터미널에서
+쓰는 명령이라 이게 없으면 배정을 받아도 아무것도 못 한다.
 
 앱이 control daemon을 확인하고 없으면 직접 띄운다. 최초 빌드 뒤에는 앱만 열면
 된다.
