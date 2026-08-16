@@ -5,6 +5,7 @@ import json
 import os
 import selectors
 import subprocess
+from .terminal import AgentCandidate
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from threading import Event
@@ -19,28 +20,9 @@ LIFECYCLE_MAP = {
 }
 
 
-@dataclass(frozen=True)
-class CmuxAgentCandidate:
-    provider: str
-    agent_session_id: str
-    surface_id: str
-    surface_ref: str | None
-    workspace_ref: str | None
-    title: str
-    tty: str | None
-    cwd: str | None
-    lifecycle: str
-    binding_verified: bool = False
-    verification_reason: str = "not_checked"
-    hidden_reason: str | None = None
-
-    def public_dict(self, *, diagnostic: bool = False) -> dict[str, Any]:
-        value = asdict(self)
-        if not diagnostic:
-            value.pop("surface_ref", None)
-            value.pop("surface_id", None)
-            value.pop("hidden_reason", None)
-        return value
+# 후보 타입은 어댑터 경계에 있다. 예전 이름을 별칭으로 남겨 부르던 곳을
+# 건드리지 않는다.
+CmuxAgentCandidate = AgentCandidate
 
 
 class CmuxError(RuntimeError):

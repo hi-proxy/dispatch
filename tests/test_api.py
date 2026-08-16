@@ -408,6 +408,46 @@ def test_multiple_recipients_and_pm_reference_are_distinct(tmp_path):
         ]
 
 
+def test_reference_is_delivered_but_marked_as_listen_only(tmp_path):
+    """참조도 받아 봐야 맥락이 되지만, 수신자 자리에 서면 안 된다.
+
+    배달하지 않으면 보내는 쪽이 참조 대신 수신자로 넣게 되고, 받는 쪽은
+    그것을 지시로 읽어 서로 답장을 물고 늘어진다.
+    """
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        for principal_id, kind in (
+            ("pm", "human"), ("manager", "agent"), ("builder", "agent")
+        ):
+            client.put(
+                f"/v1/principals/{principal_id}",
+                json={"id": principal_id, "kind": kind, "display_name": principal_id},
+            )
+        client.post(
+            "/v1/messages",
+            json={
+                "workspace_id": "local",
+                "sender_id": "manager",
+                "recipient_ids": ["pm"],
+                "reference_ids": ["builder"],
+                "body": "보고",
+            },
+        )
+        delivered = client.get(
+            "/v1/messages", params={"recipient": "builder", "after": 0}
+        ).json()
+        assert [item["body"] for item in delivered] == ["보고"]
+        assert delivered[0]["is_reference"] == 1
+
+        to_pm = client.get(
+            "/v1/messages", params={"recipient": "pm", "after": 0}
+        ).json()
+        assert to_pm[0]["is_reference"] == 0
+
+        timeline = client.get("/v1/workspaces/local/timeline").json()
+        assert [item["recipient_id"] for item in timeline[0]["recipients"]] == ["pm"]
+
+
 def test_role_address_queues_until_assignment_and_preserves_history(tmp_path):
     app = create_app(tmp_path / "api.db")
     with TestClient(app) as client:

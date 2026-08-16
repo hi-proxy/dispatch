@@ -188,6 +188,7 @@ def format_bootstrap(value: dict) -> str:
             f"- restore context: {usage['history']}",
             f"- reply PM: {usage['reply_pm']}",
             f"- message role: {usage['message_role']}",
+            f"- copy role (listen only): {usage['copy_role']}",
             f"- request review/approval: {usage['request_review']} / {usage['request_approval']}",
             f"- work: {usage['work_start']} / {usage['work_report']} / {usage['work_done']}",
             f"- recovery: {usage['recovery']}",
@@ -197,6 +198,11 @@ def format_bootstrap(value: dict) -> str:
             "위험하거나 되돌릴 수 없는 작업은 실행하기 전에 "
             f"{usage['request_approval']}로 먼저 묻는다. "
             "터미널 권한 확인 화면에서 기다리면 PM은 무엇을 묻는지 알 수 없다.",
+            # 참조가 지시로 읽히면 서로 답장을 물고 늘어진다. 남에게 보낼 때도
+            # 받을 때도 같은 규칙이라 한 줄로 묶어 둔다.
+            "inbox의 for_me=false는 참조다. 맥락으로만 두고 답하지 않는다. "
+            "사실이 틀렸을 때만 짧게 바로잡는다. 남이 알아두기만 하면 될 때는 "
+            "수신자가 아니라 참조로 보낸다.",
         ]
     )
 
@@ -291,6 +297,9 @@ def emit_inbox(messages: list[dict]) -> None:
                 "seq": display_seq(message),
                 "project": message.get("workspace_id"),
                 "from": message.get("sender_name", message["sender_id"]),
+                # 나에게 온 말인지 옆에서 듣는 말인지. 이 구분이 없으면 참조로
+                # 받은 것까지 지시로 읽고 조사에 들어간다.
+                "for_me": not message.get("is_reference"),
                 "body": message["body"],
                 "track": message.get("track"),
                 "tags": message.get("tags", []),
@@ -301,6 +310,12 @@ def emit_inbox(messages: list[dict]) -> None:
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     if messages:
         print('Reply with: dispatch reply "YOUR MESSAGE"', file=sys.stderr)
+        if any(message.get("is_reference") for message in messages):
+            print(
+                'for_me=false는 참조다. 맥락으로만 두고 답하지 않는다. '
+                "사실이 틀렸을 때만 짧게 바로잡는다.",
+                file=sys.stderr,
+            )
         print(
             "If inbox output was not captured, recover with: dispatch history 20",
             file=sys.stderr,

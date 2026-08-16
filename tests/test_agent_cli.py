@@ -86,6 +86,7 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
                 "history": "dispatch history 20",
                 "reply_pm": 'dispatch reply "내용"',
                 "message_role": 'dispatch reply --role 역할명 "내용"',
+                "copy_role": 'dispatch reply --ref 역할명 "내용"',
                 "request_review": 'dispatch request --level r2 "내용"',
                 "request_approval": 'dispatch request --level r3 "내용"',
                 "work_start": 'dispatch work start "작업명"',
@@ -100,6 +101,7 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
     assert "dispatch request --level r3" in output
     assert "restore context: dispatch history 20" in output
     assert "recovery:" in output
+    assert "for_me=false는 참조다" in output
 
 
 def test_active_project_defaults_and_persists_per_agent(tmp_path):
@@ -175,7 +177,7 @@ def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {
         "messages": [{
-            "seq": 25, "project": "local", "from": "CTO",
+            "seq": 25, "project": "local", "from": "CTO", "for_me": True,
             "body": "approve", "track": None, "tags": [],
         }]
     }
@@ -183,6 +185,20 @@ def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
     assert "Reply with:" not in captured.out
     assert "Reply with:" in captured.err
     assert "dispatch history 20" in captured.err
+    assert "참조" not in captured.err
+
+
+def test_inbox_marks_reference_messages_as_listen_only(capsys):
+    emit_inbox(
+        [{
+            "seq": 26, "workspace_id": "local", "sender_id": "cto",
+            "sender_name": "CTO", "body": "PM께 보고", "track": None, "tags": [],
+            "is_reference": 1,
+        }]
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["messages"][0]["for_me"] is False
+    assert "답하지 않는다" in captured.err
 
 
 def test_message_help_documents_tracks_tags_roles_and_inheritance(capsys):
