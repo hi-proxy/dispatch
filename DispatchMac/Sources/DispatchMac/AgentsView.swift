@@ -72,9 +72,14 @@ struct AgentsView: View {
         }.buttonStyle(.plain)
     }
 
+    private func dotColor(_ agent: AgentTerminal) -> Color {
+        guard agent.connected else { return .clear }
+        return agent.awaitingInput ? .orange : statusColor(agent.lifecycle)
+    }
+
     private func statusDot(_ agent: AgentTerminal) -> some View {
         Circle()
-            .fill(agent.connected ? statusColor(agent.lifecycle) : .clear)
+            .fill(dotColor(agent))
             .frame(width: 7, height: 7)
             .overlay {
                 if !agent.connected {
@@ -229,6 +234,7 @@ struct AgentsView: View {
         guard agent.connected else {
             return agent.bindingVerified ? "연결되지 않음" : "binding 미검증"
         }
+        if agent.awaitingInput { return "터미널 확인 필요 — 빈 프롬프트가 아님" }
         switch agent.lifecycle {
         case "running": return "작업 중"
         case "needs_input": return "입력 대기 중"
@@ -239,7 +245,7 @@ struct AgentsView: View {
 
     private func statusTint(_ agent: AgentTerminal) -> Color {
         guard agent.connected else { return .secondary }
-        return statusColor(agent.lifecycle)
+        return agent.awaitingInput ? .orange : statusColor(agent.lifecycle)
     }
 
     private func nicknameEditor(_ agent: AgentTerminal) -> some View {

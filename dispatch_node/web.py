@@ -151,6 +151,14 @@ def create_web_app(
                         value["nickname"] = binding.get("nickname") if binding else None
                         value["principal_id"] = binding.get("principal_id") if binding else None
                         value["git"] = inspect_git_context(candidate.cwd)
+                        # needs_input인데 빈 프롬프트가 아니면 권한 확인이나
+                        # 선택 화면에서 멈춘 것이다. 여기서만 화면을 읽으므로
+                        # read-screen 호출은 discovery 주기로 제한된다.
+                        value["awaiting_input"] = bool(
+                            value["connected"]
+                            and candidate.lifecycle == "needs_input"
+                            and not cmux.prompt_ready(candidate.surface_id)
+                        )
                         agents.append(value)
                     discovery_cache.update(
                         expires_at=now + 15,

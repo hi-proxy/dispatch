@@ -353,6 +353,8 @@ struct AgentTerminal: Decodable, Identifiable {
     var lifecycle: String
     var bindingVerified: Bool
     var connected: Bool
+    /// 빈 프롬프트가 아닌 무언가에서 멈춰 있다. 권한 확인이나 선택 화면이다.
+    var awaitingInput: Bool = false
     var localName: String?
     var nickname: String?
     var principalID: String?
@@ -363,6 +365,7 @@ struct AgentTerminal: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case provider, title, cwd, lifecycle, connected, nickname, memberships
         case principalID = "principal_id"
+        case awaitingInput = "awaiting_input"
         case agentSessionID = "agent_session_id"
         case surfaceID = "surface_id"
         case bindingVerified = "binding_verified"

@@ -110,9 +110,10 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 7) {
                     Circle()
-                        .fill(model.isConnected ? Color.green : Color.red)
+                        .fill(statusBarTint)
                         .frame(width: 7, height: 7)
-                    Text(agentSummary).font(.caption).foregroundStyle(.secondary)
+                    Text(agentSummary).font(.caption)
+                        .foregroundStyle(awaitingCount > 0 ? Color.orange : .secondary)
                     Spacer()
                     Image(systemName: "chevron.up").font(.caption2).foregroundStyle(.tertiary)
                 }
@@ -125,8 +126,20 @@ struct ContentView: View {
         .background(.bar)
     }
 
+    private var statusBarTint: Color {
+        guard model.isConnected else { return .red }
+        return awaitingCount > 0 ? .orange : .green
+    }
+
+    private var awaitingCount: Int {
+        model.snapshot.agents.filter(\.awaitingInput).count
+    }
+
     private var agentSummary: String {
         guard model.isConnected else { return "Disconnected" }
+        if awaitingCount > 0 {
+            return "\(awaitingCount)개 터미널 확인 필요"
+        }
         let online = model.snapshot.targets.filter { target in
             let lifecycle = model.snapshot.statuses.first { $0.id == target.id }?.lifecycle
                 ?? target.lifecycle
