@@ -87,3 +87,45 @@ def test_stale_pending_requests_stop_showing_as_cards(tmp_path, monkeypatch):
         assert client.get(
             f"/v1/permission-requests/{created['id']}"
         ).json()["status"] == "expired"
+
+
+def test_gate_speaks_the_permission_request_hook_contract(tmp_path, monkeypatch):
+    """PermissionRequest는 decision·reason으로 받는다.
+
+    permissionDecision·permissionDecisionReason은 PreToolUse의 이름이다. 그걸
+    보내면 조용히 무시돼서, PM이 눌러도 터미널에서 아무 일이 없다. 8/16 실측:
+    승인 15건이 DB에 정상 기록됐는데 하나도 전달되지 않았다. API 왕복만
+    검사하고 hook 계약은 검사하지 않아 새어나갔다.
+    """
+    import io
+    from dispatch_node import agent_cli
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def create_permission_request(self, **kwargs):
+            return {"id": "req-1"}
+
+        def permission_request(self, request_id):
+            return {"status": "allowed"}
+
+    monkeypatch.setattr(agent_cli, "PMClient", FakeClient)
+    monkeypatch.setattr(
+        agent_cli.sys, "stdin",
+        io.StringIO(json.dumps({"session_id": "s-1", "tool_name": "Bash"})),
+    )
+
+    class FakeRegistry:
+        def state(self, key):
+            return "local"
+
+    result = agent_cli.permission_gate(
+        {"server": "http://127.0.0.1:8787"}, FakeRegistry(),
+        {"principal_id": "agent-a"}, wait_seconds=5,
+    )
+    output = result["hookSpecificOutput"]
+    assert output["hookEventName"] == "PermissionRequest"
+    assert output["decision"] == "allow"
+    assert "reason" in output
+    assert "permissionDecision" not in output
