@@ -1067,7 +1067,20 @@ class DispatchDB:
                                 SELECT 1 FROM message_references r
                                 WHERE r.message_seq = m.seq
                                   AND r.principal_id = i.recipient_id
-                              ) AS is_reference
+                              ) AS is_reference,
+                              -- 사람이 마지막으로 말한 뒤 에이전트끼리 몇 번
+                              -- 오갔는지. 막지 않고 알려만 준다. 길어진 것을
+                              -- 알면 새로 보탤 것이 없을 때 멈출 수 있다.
+                              (SELECT COUNT(*) FROM messages c
+                               WHERE c.workspace_id = m.workspace_id
+                                 AND c.seq <= m.seq
+                                 AND c.seq > COALESCE((
+                                   SELECT MAX(h.seq) FROM messages h
+                                   JOIN principals hp ON hp.id = h.sender_id
+                                   WHERE h.workspace_id = m.workspace_id
+                                     AND h.seq <= m.seq AND hp.kind = 'human'
+                                 ), 0)
+                              ) AS agent_chain
                 FROM messages m
                 JOIN inbox i ON i.message_seq = m.seq
                 JOIN principals p ON p.id = m.sender_id

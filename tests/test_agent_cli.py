@@ -178,7 +178,7 @@ def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
     assert json.loads(captured.out) == {
         "messages": [{
             "seq": 25, "project": "local", "from": "CTO", "for_me": True,
-            "body": "approve", "track": None, "tags": [],
+            "chain": 0, "body": "approve", "track": None, "tags": [],
         }]
     }
     assert captured.out.count("\n") == 1
@@ -186,6 +186,21 @@ def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
     assert "Reply with:" in captured.err
     assert "dispatch history 20" in captured.err
     assert "참조" not in captured.err
+    assert "오갔다" not in captured.err
+
+
+def test_inbox_reports_chain_length_without_blocking(capsys):
+    emit_inbox(
+        [{
+            "seq": 40, "workspace_id": "local", "sender_id": "cto",
+            "sender_name": "CTO", "body": "재확인", "track": None, "tags": [],
+            "agent_chain": 7,
+        }]
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["messages"][0]["chain"] == 7
+    assert "7번 오갔다" in captured.err
+    assert "보탤 사실이 없으면" in captured.err
 
 
 def test_inbox_marks_reference_messages_as_listen_only(capsys):

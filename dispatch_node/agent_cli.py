@@ -203,6 +203,8 @@ def format_bootstrap(value: dict) -> str:
             "inbox의 for_me=false는 참조다. 맥락으로만 두고 답하지 않는다. "
             "사실이 틀렸을 때만 짧게 바로잡는다. 남이 알아두기만 하면 될 때는 "
             "수신자가 아니라 참조로 보낸다.",
+            "inbox의 chain은 PM 발화 이후 에이전트끼리 오간 횟수다. 막지 않으니 "
+            "필요하면 이어가되, 보탤 사실이 없으면 멈춘다.",
         ]
     )
 
@@ -290,6 +292,11 @@ def display_seq(message: dict) -> int:
     return int(value) if value is not None else int(message["seq"])
 
 
+# 프론티어 모델은 대개 2-3왕복에서 스스로 멈춘다. 그 언저리부터 알려주면
+# 유용한 왕복을 막지 않으면서 늘어지는 것만 짚어 준다.
+CHAIN_NOTICE = 5
+
+
 def emit_inbox(messages: list[dict]) -> None:
     payload = {
         "messages": [
@@ -300,6 +307,8 @@ def emit_inbox(messages: list[dict]) -> None:
                 # 나에게 온 말인지 옆에서 듣는 말인지. 이 구분이 없으면 참조로
                 # 받은 것까지 지시로 읽고 조사에 들어간다.
                 "for_me": not message.get("is_reference"),
+                # PM이 마지막으로 말한 뒤 에이전트끼리 오간 횟수.
+                "chain": int(message.get("agent_chain") or 0),
                 "body": message["body"],
                 "track": message.get("track"),
                 "tags": message.get("tags", []),
@@ -314,6 +323,14 @@ def emit_inbox(messages: list[dict]) -> None:
             print(
                 'for_me=false는 참조다. 맥락으로만 두고 답하지 않는다. '
                 "사실이 틀렸을 때만 짧게 바로잡는다.",
+                file=sys.stderr,
+            )
+        chain = max(int(message.get("agent_chain") or 0) for message in messages)
+        if chain >= CHAIN_NOTICE:
+            print(
+                f"PM 발화 이후 에이전트끼리 {chain}번 오갔다. "
+                "보탤 사실이 없으면 여기서 멈춘다. "
+                "판단이 필요하면 PM에게 dispatch request로 묻는다.",
                 file=sys.stderr,
             )
         print(

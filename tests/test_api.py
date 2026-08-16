@@ -448,6 +448,52 @@ def test_reference_is_delivered_but_marked_as_listen_only(tmp_path):
         assert [item["recipient_id"] for item in timeline[0]["recipients"]] == ["pm"]
 
 
+def test_agent_chain_counts_only_since_the_last_human_message(tmp_path):
+    """길어진 것을 알려만 준다. 막지는 않는다."""
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        for principal_id, kind in (
+            ("pm", "human"), ("a", "agent"), ("b", "agent")
+        ):
+            client.put(
+                f"/v1/principals/{principal_id}",
+                json={"id": principal_id, "kind": kind, "display_name": principal_id},
+            )
+
+        def post(sender: str, recipients: list[str], body: str) -> None:
+            client.post(
+                "/v1/messages",
+                json={
+                    "workspace_id": "local", "sender_id": sender,
+                    "recipient_ids": recipients, "body": body,
+                },
+            )
+
+        post("pm", ["a", "b"], "둘 다 본다")
+        post("a", ["pm", "b"], "1")
+        post("b", ["pm", "a"], "2")
+        post("a", ["pm", "b"], "3")
+        chains = {
+            item["body"]: item["agent_chain"]
+            for item in client.get(
+                "/v1/messages", params={"recipient": "b", "after": 0}
+            ).json()
+        }
+        assert chains == {"둘 다 본다": 0, "1": 1, "3": 3}
+
+        # 사람이 다시 말하면 0부터 센다.
+        post("pm", ["a", "b"], "정리하자")
+        post("b", ["pm", "a"], "4")
+        after = {
+            item["body"]: item["agent_chain"]
+            for item in client.get(
+                "/v1/messages", params={"recipient": "a", "after": 0}
+            ).json()
+        }
+        assert after["정리하자"] == 0
+        assert after["4"] == 1
+
+
 def test_role_address_queues_until_assignment_and_preserves_history(tmp_path):
     app = create_app(tmp_path / "api.db")
     with TestClient(app) as client:
