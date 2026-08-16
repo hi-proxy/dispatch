@@ -78,17 +78,17 @@ class IdleGate:
         )
         if pending["pending_count"] == 0:
             return GateDecision(eligible=False, reason="no_pending", **common)
-        # unknown은 아직 한 턴도 끝내지 않은 새 세션이다. cmux가 hook을 한 번도
-        # 못 받아서 그렇게 적는다. 이걸 막으면 갓 배정한 에이전트는 첫 메시지를
-        # 영원히 못 받는다 — 사람이 터미널을 한 번 건드려 줘야만 풀린다.
-        # 안전은 lifecycle이 아니라 prompt_ready가 본다. 화면에 빈 프롬프트가
-        # 있으면 무엇을 가로채는 일이 없다.
-        checks_screen = lifecycle in ("needs_input", "unknown")
-        prompt_ready = False
-        if checks_screen:
-            prompt_ready = self.adapter.prompt_ready(binding["surface_id"])
-        if lifecycle not in ("idle", "needs_input", "unknown") or (
-            checks_screen and not prompt_ready
+        # idle만 믿고 나머지는 전부 화면이 판단한다. 한 턴도 안 돈 새 세션의
+        # lifecycle은 믿을 수 없다 — cmux가 unknown으로 적기도 하고 running에
+        # 머물기도 한다(8/16 tester1은 unknown, tester2는 running이었고 둘 다
+        # 화면은 빈 프롬프트였다). lifecycle만 보면 갓 배정한 에이전트는 첫
+        # 메시지를 영원히 못 받고, 사람이 터미널을 건드려 줘야만 풀린다.
+        #
+        # 화면으로 내려도 안전하다. 진짜로 일하는 중이면 빈 프롬프트가 없어서
+        # 어차피 못 깨운다. 여기까지 왔다는 건 보낼 것이 있다는 뜻이라
+        # read-screen 호출도 대기 중일 때만 일어난다.
+        if lifecycle != "idle" and not self.adapter.prompt_ready(
+            binding["surface_id"]
         ):
             return GateDecision(
                 eligible=False, reason=f"lifecycle_{lifecycle}", **common

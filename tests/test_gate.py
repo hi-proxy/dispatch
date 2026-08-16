@@ -91,26 +91,31 @@ def test_needs_input_wakes_only_at_bare_prompt(tmp_path):
 
 
 def test_fresh_session_wakes_at_bare_prompt(tmp_path):
-    """갓 띄운 세션은 cmux가 unknown으로 적는다. hook을 한 번도 못 받아서다.
+    """한 턴도 안 돈 세션의 lifecycle은 믿을 수 없다.
 
-    이걸 막으면 배정 직후 첫 메시지가 영원히 도착하지 않고, 사람이 터미널을
-    한 번 건드려 줘야만 풀린다. 안전은 화면이 본다.
+    8/16 실측: 같은 조건에서 tester1은 unknown, tester2는 running이었고 둘 다
+    화면은 빈 프롬프트였다. lifecycle만 보면 배정 직후 첫 메시지가 영원히
+    도착하지 않고, 사람이 터미널을 건드려 줘야만 풀린다. 화면이 판단한다.
     """
-    registry = LocalRegistry(tmp_path / "node.db")
-    fresh = candidate("unknown")
-    registry.attach("agent-1", fresh)
-    record_pending(registry)
+    for lifecycle in ("unknown", "running"):
+        registry = LocalRegistry(tmp_path / f"node-{lifecycle}.db")
+        fresh = candidate(lifecycle)
+        registry.attach("agent-1", fresh)
+        record_pending(registry)
 
-    busy = GateCmux(fresh, prompt_ready=False)
-    assert IdleGate(registry, busy, settle_seconds=0).run(
-        "agent-1", send=True
-    ).reason == "lifecycle_unknown"
-    assert busy.wakes == []
+        busy = GateCmux(fresh, prompt_ready=False)
+        assert IdleGate(registry, busy, settle_seconds=0).run(
+            "agent-1", send=True
+        ).reason == f"lifecycle_{lifecycle}"
+        assert busy.wakes == []
 
-    ready = GateCmux(fresh, prompt_ready=True)
-    decision = IdleGate(registry, ready, settle_seconds=0).run("agent-1", send=True)
-    assert decision.eligible is True
-    assert ready.wakes == [("surface-uuid", "[dispatch] inbox")]
+        ready = GateCmux(fresh, prompt_ready=True)
+        decision = IdleGate(registry, ready, settle_seconds=0).run(
+            "agent-1", send=True
+        )
+        assert decision.eligible is True
+        assert ready.wakes == [("surface-uuid", "[dispatch] inbox")]
+        registry.close()
 
 
 def test_idle_collapses_pending_and_sends_once(tmp_path):
