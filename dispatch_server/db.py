@@ -572,6 +572,22 @@ class DispatchDB:
 
     def upsert_binding(self, binding: dict[str, Any]) -> dict[str, Any]:
         with self.transaction() as conn:
+            # 창 하나에 에이전트 하나다. 같은 창에 새 세션이 들어오면 앞의
+            # 주인은 이미 없다. 비켜 주지 않으면 UNIQUE에 걸려 sync가 통째로
+            # 409를 내고, 그 노드의 배정과 연결이 전부 막힌다.
+            conn.execute(
+                """
+                DELETE FROM agent_bindings
+                WHERE node_id = ? AND terminal_provider = ?
+                  AND terminal_session_id = ? AND agent_id != ?
+                """,
+                (
+                    binding["node_id"],
+                    binding["terminal_provider"],
+                    binding["terminal_session_id"],
+                    binding["agent_id"],
+                ),
+            )
             conn.execute(
                 """
                 INSERT INTO agent_bindings(
