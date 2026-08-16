@@ -79,7 +79,11 @@ Use role names as stable addresses; session names may change.""",
     )
     gate.add_argument(
         "--wait", type=int, default=110,
-        help="seconds to wait before stepping aside so the terminal handles it",
+        help="kept for compatibility; the gate never waits",
+    )
+    commands.add_parser(
+        "permission-clear",
+        help="mark this session's pending permission notice as handled",
     )
     history = commands.add_parser("history", help="read shared project history")
     history.add_argument("count", nargs="?", type=int, default=20)
@@ -262,6 +266,37 @@ def permission_gate(
     return {}
 
 
+def permission_clear(
+    config: dict, registry: LocalRegistry, binding: dict
+) -> dict:
+    """도구가 실제로 실행됐으니 권한 알림을 걷는다.
+
+    사람이 터미널에서 답한 것을 서버는 알 수 없어서, 지금까지는 시간이 지나야
+    걷혔다. 그동안 PM 화면의 입력창이 괜히 막혀 있었다. 도구가 돌았다는 것은
+    답이 끝났다는 뜻이라 그 순간이 정확하다.
+    """
+    try:
+        payload = json.load(sys.stdin)
+    except Exception:
+        payload = {}
+    session_id = payload.get("session_id")
+    if not session_id:
+        return {}
+
+    workspace_id = active_project(registry, binding["principal_id"])
+    client = PMClient(config["server"], registry, workspace_id=workspace_id)
+    cleared = []
+    try:
+        for request in client.pending_permission_requests():
+            if request.get("session_id") != session_id:
+                continue
+            client.resolve_permission_request(request["id"], "expired")
+            cleared.append(request["id"])
+    except Exception:
+        pass
+    return {"cleared": cleared}
+
+
 def active_project(registry: LocalRegistry, principal_id: str) -> str:
     return registry.state(f"active_project:{principal_id}") or "local"
 
@@ -428,6 +463,8 @@ def main() -> None:
             )
         elif args.command == "permission-gate":
             print(json.dumps(permission_gate(config, registry, binding, args.wait)))
+        elif args.command == "permission-clear":
+            print(json.dumps(permission_clear(config, registry, binding)))
         elif args.command == "reply":
             workspace_id = args.project or active_project(
                 registry, binding["principal_id"]
