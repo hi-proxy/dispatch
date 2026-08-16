@@ -419,6 +419,7 @@ extension ChatMessage {
 struct PermissionRequest: Decodable, Identifiable {
     var id: String
     var sessionID: String
+    var agentID: String?
     var agentName: String?
     var toolName: String
     var toolInput: String
@@ -441,6 +442,7 @@ struct PermissionRequest: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id
         case sessionID = "session_id"
+        case agentID = "agent_id"
         case agentName = "agent_name"
         case toolName = "tool_name"
         case toolInput = "tool_input"

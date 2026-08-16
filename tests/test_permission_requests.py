@@ -128,3 +128,44 @@ def test_gate_never_holds_the_terminal(tmp_path, monkeypatch):
     )
     assert result == {}
     assert polled == []
+
+
+def test_clear_removes_only_this_session_notice(tmp_path, monkeypatch):
+    """도구가 실제로 돌았다는 것은 사람이 답을 끝냈다는 뜻이다.
+
+    서버는 터미널의 답을 알 수 없어 시간으로만 걷었고, 그동안 PM 화면의
+    입력창이 괜히 막혀 있었다. 같은 방의 다른 세션 것까지 걷으면 안 된다.
+    """
+    import io
+    from dispatch_node import agent_cli
+
+    resolved = []
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def pending_permission_requests(self):
+            return [
+                {"id": "mine", "session_id": "s-1"},
+                {"id": "someone-else", "session_id": "s-2"},
+            ]
+
+        def resolve_permission_request(self, request_id, status):
+            resolved.append((request_id, status))
+
+    class FakeRegistry:
+        def state(self, key):
+            return "local"
+
+    monkeypatch.setattr(agent_cli, "PMClient", FakeClient)
+    monkeypatch.setattr(
+        agent_cli.sys, "stdin", io.StringIO(json.dumps({"session_id": "s-1"}))
+    )
+
+    result = agent_cli.permission_clear(
+        {"server": "http://127.0.0.1:8787"}, FakeRegistry(),
+        {"principal_id": "agent-a"},
+    )
+    assert result == {"cleared": ["mine"]}
+    assert resolved == [("mine", "expired")]

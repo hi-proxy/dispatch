@@ -514,9 +514,24 @@ private struct ChatComposer: View {
     /// 터미널이 권한 확인에서 멈춰 있으면 보내도 읽지 못한다. 그 사실을
     /// 화면이 감추면 PM은 보냈다고 믿고 기다린다.
     ///
+    /// 지금 보내려는 상대가 멈춰 있을 때만 막는다. 방에 여럿이 있는데 하나
+    /// 멈췄다고 전부 막으면 멀쩡한 상대에게도 말을 못 건다.
+    ///
     /// 쌓지 않고 최신 하나만 본다. 터미널은 한 번에 하나만 막힌다.
     private var blockedBy: PermissionRequest? {
-        model.snapshot.permissionRequests.last
+        let recipients = Set(
+            model.snapshot.roles
+                .filter { model.selectedRoles.contains($0.id) }
+                .compactMap(\.agentID)
+        ).union(
+            model.snapshot.targets
+                .filter { model.selectedTargets.contains($0.id) }
+                .map(\.principalID)
+        )
+        return model.snapshot.permissionRequests.last {
+            guard let agent = $0.agentID else { return false }
+            return recipients.contains(agent)
+        }
     }
 
     /// 입력창을 덮는 띠. 승인·거절 버튼을 두지 않는다 — 이 provider에서는
