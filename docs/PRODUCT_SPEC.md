@@ -200,6 +200,17 @@ Node registry는 Server SSOT의 대체 사본이 아니다.
 - direct recipients, role recipients, references
 - `in_reply_to`, track, tags, inherit-context 여부
 - 생성 시각과 단조 증가 `seq`
+- 방마다 1부터 세는 표시 번호
+
+`seq`는 저장과 정렬에 쓰는 전역 단조 번호이고, 표시 번호는 방 안에서 빈틈없이
+이어진다. 사람과 에이전트가 부르는 번호는 언제나 표시 번호다. 전역 번호를
+그대로 노출하면 한 방만 보는 참여자에게는 번호가 띄엄띄엄해 보이고, 그것을
+메시지 누락으로 읽어 불필요한 확인을 하게 된다. 이 제품은 맥락 없는 새 에이전트
+세션에게 반복해서 쓰이므로 안내로 보완하지 않는다.
+
+inbox·history·발신 echo의 번호, `history --after`와 `reply --in-reply-to`의
+입력, PM 화면의 메시지·핀·북마크 번호가 모두 표시 번호다. 저장된 참조는 전역
+`seq`를 유지하고 경계에서만 변환한다.
 
 본문은 최대 20,000자다. 초과 본문은 자르지 않고 요청을 거절한다. 성공 응답은 실제로
 저장한 본문 길이와 routing metadata를 되읽을 수 있어야 한다.

@@ -221,6 +221,7 @@ class PMClient:
         body: str,
         *,
         in_reply_to: int | None = None,
+        in_reply_to_project_seq: int | None = None,
         reference_ids: list[str] | None = None,
         role_ids: list[str] | None = None,
         track: str | None = None,
@@ -243,6 +244,7 @@ class PMClient:
                 "role_ids": [self._role_id(role_id) for role_id in (role_ids or [])],
                 "body": body,
                 "in_reply_to": in_reply_to,
+                "in_reply_to_project_seq": in_reply_to_project_seq,
                 "track": track,
                 "tags": tags,
                 "inherit_context": inherit_context,
@@ -261,6 +263,7 @@ class PMClient:
         reply_level: str = "r1",
         reference_ids: list[str] | None = None,
         in_reply_to: int | None = None,
+        in_reply_to_project_seq: int | None = None,
         track: str | None = None,
         tags: list[str] | None = None,
         inherit_context: bool = True,
@@ -284,6 +287,7 @@ class PMClient:
                     for reference_id in (reference_ids or [])
                 ],
                 "in_reply_to": in_reply_to,
+                "in_reply_to_project_seq": in_reply_to_project_seq,
                 "track": track,
                 "tags": tags,
                 "inherit_context": inherit_context,
@@ -473,13 +477,15 @@ class PMClient:
 
     def timeline(
         self, limit: int = 100, after: int | None = None,
-        before: int | None = None,
+        before: int | None = None, after_project_seq: int | None = None,
     ) -> list[dict]:
         query = {"limit": limit}
         if after is not None:
             query["after"] = after
         if before is not None:
             query["before"] = before
+        if after_project_seq is not None:
+            query["after_project_seq"] = after_project_seq
         result = self._request(
             "GET",
             f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/timeline?"

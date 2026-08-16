@@ -683,7 +683,7 @@ private struct BookmarkEditor: View {
             TextField("예: 디자인 웨이브1 완료", text: $label)
                 .textFieldStyle(.roundedBorder)
             HStack {
-                Text("#\(message.seq)").font(.caption).foregroundStyle(.tertiary)
+                Text("#\(message.displaySeq)").font(.caption).foregroundStyle(.tertiary)
                 Spacer()
                 Button("취소") { dismiss() }
                 Button("추가") {
@@ -724,7 +724,7 @@ private struct TimelinePinEditor: View {
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { createPin() }
             HStack {
-                Text("#\(after.seq) 다음").font(.caption).foregroundStyle(.tertiary)
+                Text("#\(after.displaySeq) 다음").font(.caption).foregroundStyle(.tertiary)
                 Spacer()
                 Button("취소") { dismiss() }
                 Button("핀 추가") { createPin() }
@@ -873,7 +873,7 @@ private struct TimelineSideRail: View {
                         .font(.caption.weight(active ? .bold : .medium))
                         .foregroundStyle(active ? color : .primary)
                         .multilineTextAlignment(.leading)
-                    Text("after #\(pin.afterMessageSeq) · \(messageTime(pin.createdAt))")
+                    Text("after #\(pin.displaySeq) · \(messageTime(pin.createdAt))")
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
             }
@@ -894,7 +894,7 @@ private struct TimelineSideRail: View {
         Button { jumpBookmark(bookmark) } label: {
             VStack(alignment: .leading, spacing: 3) {
                 Text(bookmark.label).font(.caption.bold()).foregroundStyle(.primary)
-                Text("#\(bookmark.messageSeq) · \(messageTime(bookmark.createdAt))")
+                Text("#\(bookmark.displaySeq) · \(messageTime(bookmark.createdAt))")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1010,7 +1010,7 @@ private struct MessageRow: View {
                         Text(relationLabel(relation)).fontWeight(.semibold)
                             .foregroundStyle(relationColor(relation))
                     }
-                    Text("#\(message.seq)").foregroundStyle(.quaternary)
+                    Text("#\(message.displaySeq)").foregroundStyle(.quaternary)
                 }.font(.caption2).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 680, alignment: isMine ? .trailing : .leading)

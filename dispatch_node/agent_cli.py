@@ -192,11 +192,21 @@ def active_project(registry: LocalRegistry, principal_id: str) -> str:
     return registry.state(f"active_project:{principal_id}") or "local"
 
 
+def display_seq(message: dict) -> int:
+    """에이전트에게 보이는 번호는 방마다 1부터 센다.
+
+    전역 seq를 그대로 노출하면 한 방만 보는 에이전트에게는 번호가 띄엄띄엄
+    보이고, 그걸 누락으로 읽어 확인 작업을 하게 된다.
+    """
+    value = message.get("project_seq")
+    return int(value) if value is not None else int(message["seq"])
+
+
 def emit_inbox(messages: list[dict]) -> None:
     payload = {
         "messages": [
             {
-                "seq": message["seq"],
+                "seq": display_seq(message),
                 "project": message.get("workspace_id"),
                 "from": message.get("sender_name", message["sender_id"]),
                 "body": message["body"],
@@ -231,7 +241,7 @@ def compact_history(project_id: str, messages: list[dict]) -> dict:
         )
         items.append(
             {
-                "seq": message["seq"],
+                "seq": display_seq(message),
                 "at": message["created_at"],
                 "from": message["sender_name"],
                 "to": to,
@@ -246,10 +256,12 @@ def compact_history(project_id: str, messages: list[dict]) -> dict:
     return {"project": project_id, "messages": items}
 
 
-def stored_echo(result: dict, *, roles: list[str]) -> dict:
+def stored_echo(
+    result: dict, *, roles: list[str], in_reply_to: int | None = None
+) -> dict:
     return {
         "stored": {
-            "seq": result["seq"],
+            "seq": display_seq(result),
             "project": result["workspace_id"],
             "from": result["sender_id"],
             "recipient_ids": result.get("recipient_ids", []),
@@ -258,7 +270,8 @@ def stored_echo(result: dict, *, roles: list[str]) -> dict:
             "body_chars": len(result["body"]),
             "kind": result["kind"],
             "reply_level": result["reply_level"],
-            "in_reply_to": result.get("in_reply_to"),
+            # 되돌려 보여주는 값도 에이전트가 준 방별 번호 그대로다.
+            "in_reply_to": in_reply_to,
             "track": result.get("track"),
             "tags": result.get("tags", []),
         }
@@ -306,7 +319,7 @@ def main() -> None:
                 registry, binding["principal_id"]
             )
             client = PMClient(config["server"], registry, workspace_id=workspace_id)
-            messages = client.timeline(args.count, after=args.after)
+            messages = client.timeline(args.count, after_project_seq=args.after)
             print(
                 json.dumps(
                     compact_history(workspace_id, messages),
@@ -323,13 +336,16 @@ def main() -> None:
             result = client.send_as(
                 binding["local_name"], recipient, " ".join(args.body),
                 reference_ids=args.reference,
-                in_reply_to=args.in_reply_to,
+                in_reply_to_project_seq=args.in_reply_to,
                 track=args.track,
                 tags=args.tag,
                 inherit_context=not args.no_inherit_context,
                 role_ids=args.role,
             )
-            print(json.dumps(stored_echo(result, roles=args.role), ensure_ascii=False))
+            print(json.dumps(
+                stored_echo(result, roles=args.role, in_reply_to=args.in_reply_to),
+                ensure_ascii=False,
+            ))
         elif args.command == "request":
             workspace_id = args.project or active_project(
                 registry, binding["principal_id"]
@@ -343,13 +359,16 @@ def main() -> None:
                 kind="pm_request",
                 reply_level=args.level,
                 reference_ids=args.reference,
-                in_reply_to=args.in_reply_to,
+                in_reply_to_project_seq=args.in_reply_to,
                 track=args.track,
                 tags=args.tag,
                 inherit_context=not args.no_inherit_context,
                 role_ids=args.role,
             )
-            print(json.dumps(stored_echo(result, roles=args.role), ensure_ascii=False))
+            print(json.dumps(
+                stored_echo(result, roles=args.role, in_reply_to=args.in_reply_to),
+                ensure_ascii=False,
+            ))
         elif args.command == "shared":
             values = PMClient(
                 config["server"], registry,

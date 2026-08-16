@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS messages (
     reply_level TEXT NOT NULL DEFAULT 'r1' CHECK (reply_level IN ('r1', 'r2', 'r3')),
     in_reply_to INTEGER REFERENCES messages(seq),
     track TEXT,
+    project_seq INTEGER,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -238,6 +239,25 @@ class DispatchDB:
             )
         if "track" not in columns:
             self._connection.execute("ALTER TABLE messages ADD COLUMN track TEXT")
+        if "project_seq" not in columns:
+            # seq는 전역 단조 번호라 한 방만 보면 띄엄띄엄해진다. 에이전트가
+            # 그걸 누락으로 읽고 확인 작업을 하므로 방마다 1부터 세는 표시
+            # 번호를 따로 둔다. 저장된 참조(핀·북마크·in_reply_to)는 전역
+            # seq를 그대로 쓴다.
+            self._connection.execute(
+                "ALTER TABLE messages ADD COLUMN project_seq INTEGER"
+            )
+            self._connection.execute(
+                """UPDATE messages SET project_seq = (
+                       SELECT COUNT(*) FROM messages older
+                       WHERE older.workspace_id = messages.workspace_id
+                         AND older.seq <= messages.seq
+                   ) WHERE project_seq IS NULL"""
+            )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_project_seq"
+            " ON messages(workspace_id, project_seq)"
+        )
         role_columns = {
             row["name"]
             for row in self._connection.execute("PRAGMA table_info(workspace_roles)")
@@ -339,6 +359,15 @@ class DispatchDB:
                 "SELECT * FROM principals WHERE id = ?", (principal_id,)
             ).fetchone()
         return dict(row)
+
+    def global_seq(self, *, workspace_id: str, project_seq: int) -> int | None:
+        """방별 표시 번호를 전역 seq로 되돌린다. 경계에서만 쓴다."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT seq FROM messages WHERE workspace_id = ? AND project_seq = ?",
+                (workspace_id, project_seq),
+            ).fetchone()
+        return int(row["seq"]) if row else None
 
     def projects(self) -> list[dict[str, Any]]:
         # last_message_seq는 방마다 어디까지 왔는지 알리는 파생값이다. 읽음
@@ -881,16 +910,24 @@ class DispatchDB:
                     normalized_tags = self._message_tags(in_reply_to)
             normalized_tags = normalized_tags or []
             normalized_tags = [tag for tag in normalized_tags if tag != normalized_track]
+            next_project_seq = int(
+                conn.execute(
+                    "SELECT COALESCE(MAX(project_seq), 0) + 1 FROM messages"
+                    " WHERE workspace_id = ?",
+                    (workspace_id,),
+                ).fetchone()[0]
+            )
             cursor = conn.execute(
                 """
                 INSERT INTO messages(
                   id, workspace_id, sender_id, body, kind, reply_level, in_reply_to,
-                  track
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                  track, project_seq
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id, workspace_id, sender_id, body,
                     kind, reply_level, in_reply_to, normalized_track,
+                    next_project_seq,
                 ),
             )
             message_seq = int(cursor.lastrowid)
@@ -1037,9 +1074,11 @@ class DispatchDB:
     def bookmarks(self, workspace_id: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._connection.execute(
-                """SELECT b.*, p.display_name AS created_by_name
+                """SELECT b.*, p.display_name AS created_by_name,
+                          m.project_seq AS message_project_seq
                    FROM message_bookmarks b
                    JOIN principals p ON p.id = b.created_by
+                   LEFT JOIN messages m ON m.seq = b.message_seq
                    WHERE b.workspace_id = ?
                    ORDER BY b.message_seq ASC, b.created_at ASC""",
                 (workspace_id,),
@@ -1081,9 +1120,11 @@ class DispatchDB:
     def timeline_pins(self, workspace_id: str) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._connection.execute(
-                """SELECT t.*, p.display_name AS created_by_name
+                """SELECT t.*, p.display_name AS created_by_name,
+                          m.project_seq AS after_message_project_seq
                    FROM timeline_pins t
                    JOIN principals p ON p.id = t.created_by
+                   LEFT JOIN messages m ON m.seq = t.after_message_seq
                    WHERE t.workspace_id = ?
                    ORDER BY t.after_message_seq ASC""",
                 (workspace_id,),

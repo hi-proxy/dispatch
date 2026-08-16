@@ -48,6 +48,8 @@ class MessageCreate(BaseModel):
     kind: Literal["message", "pm_request"] = "message"
     reply_level: Literal["r1", "r2", "r3"] = "r1"
     in_reply_to: int | None = Field(default=None, gt=0)
+    # 에이전트는 방별 표시 번호로 답장 지점을 말한다. 서버가 전역 seq로 바꾼다.
+    in_reply_to_project_seq: int | None = Field(default=None, gt=0)
     track: str | None = Field(default=None, max_length=120)
     tags: list[str] | None = None
     inherit_context: bool = True

@@ -181,6 +181,22 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.post("/v1/messages", status_code=201)
     async def send_message(payload: MessageCreate) -> dict:
+        in_reply_to = payload.in_reply_to
+        if payload.in_reply_to_project_seq is not None:
+            if in_reply_to is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="in_reply_to and in_reply_to_project_seq are mutually exclusive",
+                )
+            in_reply_to = db.global_seq(
+                workspace_id=payload.workspace_id,
+                project_seq=payload.in_reply_to_project_seq,
+            )
+            if in_reply_to is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"message {payload.in_reply_to_project_seq} not found in this project",
+                )
         try:
             message, events = db.send_message(
                 workspace_id=payload.workspace_id,
@@ -192,7 +208,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
                 message_id=payload.id,
                 kind=payload.kind,
                 reply_level=payload.reply_level,
-                in_reply_to=payload.in_reply_to,
+                in_reply_to=in_reply_to,
                 track=payload.track,
                 tags=payload.tags,
                 inherit_context=payload.inherit_context,
@@ -343,10 +359,23 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         workspace_id: str,
         limit: int = Query(default=100, ge=1, le=500),
         after: int | None = Query(default=None, ge=0),
+        after_project_seq: int | None = Query(default=None, ge=0),
         before: int | None = Query(default=None, gt=0),
     ) -> list[dict]:
         if after is not None and before is not None:
             raise HTTPException(status_code=422, detail="after and before are mutually exclusive")
+        if after_project_seq is not None:
+            # 에이전트는 방별 표시 번호로 복구 지점을 말한다.
+            if after is not None or before is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="after_project_seq cannot be combined with after or before",
+                )
+            after = db.global_seq(
+                workspace_id=workspace_id, project_seq=after_project_seq
+            )
+            if after is None:
+                after = 0
         return db.workspace_timeline(workspace_id, limit, after, before)
 
     @app.get("/v1/workspaces/{workspace_id}/attention")

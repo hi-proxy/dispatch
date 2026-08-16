@@ -166,7 +166,10 @@ struct RoleRecipient: Decodable {
 }
 
 struct ChatMessage: Decodable, Identifiable {
+    /// 저장과 정렬에 쓰는 전역 번호. 화면에는 방별 번호를 쓴다.
     var seq: Int
+    /// 방마다 1부터 세는 표시 번호. 에이전트가 보는 번호와 같다.
+    var projectSeq: Int?
     var senderID: String
     var senderName: String
     var body: String
@@ -180,9 +183,12 @@ struct ChatMessage: Decodable, Identifiable {
     var detectedContexts: [DetectedContext]
     var roleRecipients: [RoleRecipient]
     var id: Int { seq }
+    /// 화면과 대화에서 부르는 번호. 에이전트가 보는 것과 같다.
+    var displaySeq: Int { projectSeq ?? seq }
 
     enum CodingKeys: String, CodingKey {
         case seq, body, recipients, references, track, tags
+        case projectSeq = "project_seq"
         case createdAt = "created_at"
         case detectedContexts = "detected_contexts"
         case roleRecipients = "role_recipients"
@@ -216,8 +222,11 @@ struct AttentionRequest: Decodable, Identifiable {
 }
 
 struct MessageBookmark: Decodable, Identifiable {
+    /// 화면에 부르는 방별 번호. 저장은 전역 seq 그대로다.
+    var messageProjectSeq: Int?
     var id: String
     var messageSeq: Int
+
     var label: String
     var createdBy: String
     var createdByName: String
@@ -226,13 +235,18 @@ struct MessageBookmark: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, label
         case messageSeq = "message_seq"
+        case messageProjectSeq = "message_project_seq"
         case createdBy = "created_by"
         case createdByName = "created_by_name"
         case createdAt = "created_at"
     }
+
+    var displaySeq: Int { messageProjectSeq ?? messageSeq }
 }
 
 struct TimelinePin: Decodable, Identifiable {
+    /// 화면에 부르는 방별 번호. 저장은 전역 seq 그대로다.
+    var afterMessageProjectSeq: Int?
     var id: String
     var afterMessageSeq: Int
     var label: String
@@ -243,10 +257,13 @@ struct TimelinePin: Decodable, Identifiable {
     enum CodingKeys: String, CodingKey {
         case id, label
         case afterMessageSeq = "after_message_seq"
+        case afterMessageProjectSeq = "after_message_project_seq"
         case createdBy = "created_by"
         case createdByName = "created_by_name"
         case createdAt = "created_at"
     }
+
+    var displaySeq: Int { afterMessageProjectSeq ?? afterMessageSeq }
 }
 
 struct SharedValue: Decodable, Identifiable {
