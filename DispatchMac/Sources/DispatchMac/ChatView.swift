@@ -51,14 +51,11 @@ struct ChatView: View {
                             LazyVStack(spacing: 8) {
                                 Color.clear.frame(height: 1).id("chat-bottom")
                                 if filteredTimeline.isEmpty, !model.isLoadingTimeline {
-                                    ContentUnavailableView(
-                                        "No messages", systemImage: "bubble.left.and.bubble.right",
-                                        description: Text("Choose a recipient and start the conversation.")
-                                    )
-                                    // 뒤집힌 스택 안이라 한쪽 패딩은 방향이
-                                    // 함께 반전된다. 대칭으로 둬서 무관하게 만든다.
-                                    .padding(.vertical, 80)
-                                    .scaleEffect(x: 1, y: -1, anchor: .center)
+                                    emptyRoomGuide
+                                        // 뒤집힌 스택 안이라 한쪽 패딩은 방향이
+                                        // 함께 반전된다. 대칭으로 둬서 무관하게 만든다.
+                                        .padding(.vertical, 60)
+                                        .scaleEffect(x: 1, y: -1, anchor: .center)
                                 }
                                 ForEach(filteredTimeline.reversed()) { message in
                                     VStack(spacing: 0) {
@@ -176,6 +173,12 @@ struct ChatView: View {
                 }.help("Pins, roles, shared and work")
             }
         }
+        .onChange(of: model.showsRoleSetup) {
+            guard model.showsRoleSetup else { return }
+            inspectorTab = .roles
+            showInspector = true
+            model.showsRoleSetup = false
+        }
         .inspector(isPresented: $showInspector) {
             inspectorPanel.inspectorColumnWidth(min: 260, ideal: 320, max: 480)
         }
@@ -187,6 +190,60 @@ struct ChatView: View {
         }
         .sheet(item: $pinningAfter) { message in
             TimelinePinEditor(after: message)
+        }
+    }
+
+    /// 방을 새로 만들면 무엇부터 해야 하는지가 화면에 없다. 남은 단계만
+    /// 보여주고 끝나면 사라진다. 온보딩은 방마다 한 번이라 상시 UI를 바꾸는
+    /// 대신 빈 상태에만 둔다.
+    private var emptyRoomGuide: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 34)).foregroundStyle(.tertiary)
+            Text(model.snapshot.roles.isEmpty ? "이 방을 쓸 준비를 하자" : "대화를 시작하자")
+                .font(.title3.bold())
+            VStack(alignment: .leading, spacing: 10) {
+                setupStep(
+                    number: 1, title: "역할 만들기",
+                    detail: "front1처럼 계속 유지할 담당자 주소를 만든다.",
+                    done: !model.snapshot.roles.isEmpty
+                )
+                setupStep(
+                    number: 2, title: "에이전트 배정",
+                    detail: "역할 카드의 Assign에서 연결까지 함께 끝낸다.",
+                    done: model.snapshot.roles.contains(where: \.assigned)
+                )
+                setupStep(
+                    number: 3, title: "Initialize",
+                    detail: "배정된 역할에게 Dispatch 사용법을 보낸다.",
+                    done: false
+                )
+            }
+            .padding(16)
+            .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
+            Button("Roles 열기", systemImage: "person.badge.key") {
+                inspectorTab = .roles
+                showInspector = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: 380)
+        .frame(maxWidth: .infinity)
+    }
+
+    private func setupStep(
+        number: Int, title: String, detail: String, done: Bool
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: done ? "checkmark.circle.fill" : "\(number).circle")
+                .foregroundStyle(done ? Color.green : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.medium))
+                    .strikethrough(done, color: .secondary)
+                    .foregroundStyle(done ? .secondary : .primary)
+                Text(detail).font(.caption).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
         }
     }
 

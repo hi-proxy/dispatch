@@ -52,10 +52,12 @@ struct RolesView: View {
         }
         .sheet(item: $assigningRole) { role in
             AssignmentEditor(
-                role: role, targets: model.snapshot.targets,
+                role: role, agents: model.snapshot.agents,
                 roles: model.snapshot.roles
-            ) { agent, onboarding in
-                if await model.assignRole(id: role.id, agentID: agent, sendOnboarding: onboarding) {
+            ) { surfaceID, onboarding in
+                if await model.connectAndAssign(
+                    roleID: role.id, surfaceID: surfaceID, sendOnboarding: onboarding
+                ) {
                     assigningRole = nil
                 }
             }
@@ -125,7 +127,7 @@ struct RolesView: View {
             Divider()
             HStack {
                 Button(role.assigned ? "Replace" : "Assign") { assigningRole = role }
-                    .disabled(model.snapshot.targets.isEmpty)
+                    .disabled(model.snapshot.agents.isEmpty)
                 if role.assigned {
                     Button("Unassign") { Task { await model.unassignRole(id: role.id) } }
                 }
@@ -260,35 +262,36 @@ private struct RoleEditor: View {
 
 private struct AssignmentEditor: View {
     let role: WorkspaceRole
-    let targets: [Target]
+    let agents: [AgentTerminal]
     let roles: [WorkspaceRole]
     let assign: (String, Bool) async -> Void
-    @State private var agentID: String
+    @State private var surfaceID: String
     @State private var sendOnboarding: Bool
     @State private var confirmReassignment = false
 
     init(
-        role: WorkspaceRole, targets: [Target], roles: [WorkspaceRole],
+        role: WorkspaceRole, agents: [AgentTerminal], roles: [WorkspaceRole],
         assign: @escaping (String, Bool) async -> Void
     ) {
         self.role = role
-        self.targets = targets
+        self.agents = agents
         self.roles = roles
         self.assign = assign
-        let current = targets.first { $0.principalID == role.agentID }
-        _agentID = State(initialValue: current?.id ?? targets.first?.id ?? "")
+        let current = agents.first { $0.principalID == role.agentID }
+        let usable = agents.first { $0.connected || $0.bindingVerified }
+        _surfaceID = State(initialValue: current?.surfaceID ?? usable?.surfaceID ?? "")
         _sendOnboarding = State(initialValue: !role.onboardingPrompt.isEmpty)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Assign \(role.name)").font(.title2.bold())
-            Text("Choose a connected session. Existing role ownership is shown before you move it.")
+            Text("연결되지 않은 세션을 골라도 된다. 배정하면서 함께 연결한다.")
                 .font(.caption).foregroundStyle(.secondary)
             sessionList
             if let occupied = selectedExistingRole, occupied.id != role.id {
                 Label(
-                    "This will remove \(selectedTargetName) from \(occupied.name) and leave that role unassigned.",
+                    "This will remove \(selectedName) from \(occupied.name) and leave that role unassigned.",
                     systemImage: "exclamationmark.triangle.fill"
                 ).font(.caption).foregroundStyle(.orange)
             }
@@ -296,16 +299,17 @@ private struct AssignmentEditor: View {
                 .disabled(role.onboardingPrompt.isEmpty)
             if !role.onboardingPrompt.isEmpty {
                 Text(role.onboardingPrompt).font(.caption).foregroundStyle(.secondary)
-                    .lineLimit(5).padding(10).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                    .lineLimit(5).padding(10)
+                    .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
             }
             HStack { Spacer(); assignmentButton }
         }.padding(24).frame(width: 520)
             .confirmationDialog(
-                "Move \(selectedTargetName) from ‘\(selectedExistingRole?.name ?? "")’ to ‘\(role.name)’?",
+                "Move \(selectedName) from ‘\(selectedExistingRole?.name ?? "")’ to ‘\(role.name)’?",
                 isPresented: $confirmReassignment, titleVisibility: .visible
             ) {
                 Button("Move session", role: .destructive) {
-                    Task { await assign(agentID, sendOnboarding) }
+                    Task { await assign(surfaceID, sendOnboarding) }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
@@ -315,32 +319,61 @@ private struct AssignmentEditor: View {
 
     private var sessionList: some View {
         VStack(spacing: 0) {
-            ForEach(Array(targets.enumerated()), id: \.element.id) { index, target in
-                sessionRow(target)
-                if index < targets.count - 1 { Divider() }
+            ForEach(Array(agents.enumerated()), id: \.element.id) { index, agent in
+                sessionRow(agent)
+                if index < agents.count - 1 { Divider() }
             }
         }.background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 9))
     }
 
-    private func sessionRow(_ target: Target) -> some View {
-        let currentRole = assignedRole(for: target)
-        return Button { agentID = target.id } label: {
+    private func sessionRow(_ agent: AgentTerminal) -> some View {
+        let currentRole = assignedRole(for: agent)
+        // binding이 유일하게 검증되지 않은 세션에는 붙지 않는다.
+        let selectable = agent.connected || agent.bindingVerified
+        return Button { surfaceID = agent.surfaceID } label: {
             HStack(spacing: 10) {
-                Image(systemName: agentID == target.id ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(agentID == target.id ? Color.accentColor : Color.secondary)
+                Image(systemName: surfaceID == agent.surfaceID ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(
+                        surfaceID == agent.surfaceID ? Color.accentColor : Color.secondary
+                    )
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(target.displayName).foregroundStyle(.primary)
+                    Text(displayName(agent)).foregroundStyle(.primary).lineLimit(1)
                     HStack(spacing: 5) {
-                        Circle().fill(currentRole == nil ? Color.green : Color.orange)
-                            .frame(width: 6, height: 6)
-                        Text(assignmentLabel(currentRole)).font(.caption)
-                            .foregroundStyle(currentRole == nil ? Color.secondary : Color.orange)
+                        Circle().fill(statusTint(agent, currentRole)).frame(width: 6, height: 6)
+                        Text(statusLabel(agent, currentRole)).font(.caption)
+                            .foregroundStyle(statusTint(agent, currentRole))
                     }
                 }
                 Spacer()
-                Text(target.provider.uppercased()).font(.caption2.bold()).foregroundStyle(.secondary)
-            }.padding(10)
-        }.buttonStyle(.plain)
+                Text(agent.provider.uppercased())
+                    .font(.caption2.bold()).foregroundStyle(.secondary)
+            }.padding(10).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!selectable)
+        .opacity(selectable ? 1 : 0.45)
+    }
+
+    private func displayName(_ agent: AgentTerminal) -> String {
+        agent.nickname?.isEmpty == false ? agent.nickname! : agent.title
+    }
+
+    private func statusTint(_ agent: AgentTerminal, _ currentRole: WorkspaceRole?) -> Color {
+        if !agent.connected && !agent.bindingVerified { return .secondary }
+        if currentRole != nil { return .orange }
+        return agent.connected ? .green : .blue
+    }
+
+    private func statusLabel(_ agent: AgentTerminal, _ currentRole: WorkspaceRole?) -> String {
+        if !agent.connected && !agent.bindingVerified {
+            return "binding 미검증 · 배정할 수 없음"
+        }
+        if let currentRole {
+            return currentRole.id == role.id
+                ? "Currently assigned to this role"
+                : "Assigned to \(currentRole.name)"
+        }
+        return agent.connected ? "Available · not assigned" : "미연결 · 배정하며 연결한다"
     }
 
     private var assignmentButton: some View {
@@ -348,31 +381,30 @@ private struct AssignmentEditor: View {
             if let occupied = selectedExistingRole, occupied.id != role.id {
                 confirmReassignment = true
             } else {
-                Task { await assign(agentID, sendOnboarding) }
+                Task { await assign(surfaceID, sendOnboarding) }
             }
-        }.buttonStyle(.borderedProminent).disabled(agentID.isEmpty)
+        }.buttonStyle(.borderedProminent).disabled(surfaceID.isEmpty)
     }
 
     private var assignmentButtonLabel: String {
         if selectedExistingRole?.id == role.id { return "Keep assignment" }
+        if let selected = selectedAgent, !selected.connected { return "Connect and assign" }
         return selectedExistingRole == nil ? "Assign" : "Reassign"
     }
 
-    private func assignedRole(for target: Target) -> WorkspaceRole? {
-        roles.first { $0.agentID == target.principalID }
+    private func assignedRole(for agent: AgentTerminal) -> WorkspaceRole? {
+        guard let principal = agent.principalID else { return nil }
+        return roles.first { $0.agentID == principal }
     }
 
-    private var selectedTarget: Target? { targets.first { $0.id == agentID } }
+    private var selectedAgent: AgentTerminal? {
+        agents.first { $0.surfaceID == surfaceID }
+    }
     private var selectedExistingRole: WorkspaceRole? {
-        selectedTarget.flatMap { assignedRole(for: $0) }
+        selectedAgent.flatMap { assignedRole(for: $0) }
     }
-    private var selectedTargetName: String { selectedTarget?.displayName ?? "session" }
-
-    private func assignmentLabel(_ assignedRole: WorkspaceRole?) -> String {
-        guard let assignedRole else { return "Available · not assigned" }
-        return assignedRole.id == role.id
-            ? "Currently assigned to this role"
-            : "Assigned to \(assignedRole.name)"
+    private var selectedName: String {
+        selectedAgent.map(displayName) ?? "session"
     }
 }
 

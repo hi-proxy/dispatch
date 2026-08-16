@@ -15,6 +15,9 @@ final class AppModel: ObservableObject {
     /// 첫 snapshot이 아직 도착하지 않은 구간. 빈 타임라인을 "메시지 없음"으로
     /// 오해시키지 않으려고 구분한다.
     @Published private(set) var isLoadingTimeline = true
+    /// 갓 만든 방은 역할을 배정해야 쓸 수 있다. 인스펙터를 Roles로 열어
+    /// 다음 할 일을 바로 보여준다.
+    @Published var showsRoleSetup = false
 
     private let api = DispatchAPI()
     private var timelineProjectID: String?
@@ -105,6 +108,38 @@ final class AppModel: ObservableObject {
         await mutate { try await api.assignRole(id: id, agentID: agentID, sendOnboarding: sendOnboarding) }
     }
 
+    /// 배정 화면에서 연결까지 끝낸다. 미연결 세션을 고르면 먼저 붙이고,
+    /// principal(localName)이 잡히면 이어서 배정한다. 예전에는 Agents 화면에
+    /// 먼저 다녀와야 해서 온보딩이 화면을 왕복했다.
+    func connectAndAssign(
+        roleID: String, surfaceID: String, sendOnboarding: Bool
+    ) async -> Bool {
+        if let localName = connectedLocalName(surfaceID) {
+            return await assignRole(
+                id: roleID, agentID: localName, sendOnboarding: sendOnboarding
+            )
+        }
+        await agentAction("toggle", surfaceID: surfaceID)
+        // 연결은 daemon이 binding을 세운 뒤에야 principal을 준다.
+        for _ in 0..<20 {
+            if let localName = connectedLocalName(surfaceID) {
+                return await assignRole(
+                    id: roleID, agentID: localName, sendOnboarding: sendOnboarding
+                )
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+            await refresh()
+        }
+        errorMessage = "세션 연결이 확인되지 않아 배정하지 못했습니다."
+        return false
+    }
+
+    private func connectedLocalName(_ surfaceID: String) -> String? {
+        guard let agent = snapshot.agents.first(where: { $0.surfaceID == surfaceID }),
+              agent.connected, let localName = agent.localName else { return nil }
+        return localName
+    }
+
     func unassignRole(id: String) async {
         _ = await mutate { try await api.unassignRole(id: id) }
     }
@@ -191,6 +226,7 @@ final class AppModel: ObservableObject {
             // 직접 대입하면 수신자 선택과 스트림이 이전 방에 남는다.
             // 방 전환 경로를 그대로 탄다.
             selectProject(project.id)
+            showsRoleSetup = true
             return true
         } catch {
             errorMessage = error.localizedDescription
