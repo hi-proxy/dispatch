@@ -90,6 +90,29 @@ def test_needs_input_wakes_only_at_bare_prompt(tmp_path):
     assert ready.wakes == [("surface-uuid", "[dispatch] inbox")]
 
 
+def test_fresh_session_wakes_at_bare_prompt(tmp_path):
+    """갓 띄운 세션은 cmux가 unknown으로 적는다. hook을 한 번도 못 받아서다.
+
+    이걸 막으면 배정 직후 첫 메시지가 영원히 도착하지 않고, 사람이 터미널을
+    한 번 건드려 줘야만 풀린다. 안전은 화면이 본다.
+    """
+    registry = LocalRegistry(tmp_path / "node.db")
+    fresh = candidate("unknown")
+    registry.attach("agent-1", fresh)
+    record_pending(registry)
+
+    busy = GateCmux(fresh, prompt_ready=False)
+    assert IdleGate(registry, busy, settle_seconds=0).run(
+        "agent-1", send=True
+    ).reason == "lifecycle_unknown"
+    assert busy.wakes == []
+
+    ready = GateCmux(fresh, prompt_ready=True)
+    decision = IdleGate(registry, ready, settle_seconds=0).run("agent-1", send=True)
+    assert decision.eligible is True
+    assert ready.wakes == [("surface-uuid", "[dispatch] inbox")]
+
+
 def test_idle_collapses_pending_and_sends_once(tmp_path):
     registry = LocalRegistry(tmp_path / "node.db")
     current = candidate("idle")
