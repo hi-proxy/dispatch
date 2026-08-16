@@ -188,7 +188,10 @@ def format_bootstrap(value: dict) -> str:
             f"- restore context: {usage['history']}",
             f"- reply PM: {usage['reply_pm']}",
             f"- message role: {usage['message_role']}",
-            f"- copy role (listen only): {usage['copy_role']}",
+            # CLI는 소스를 매번 읽지만 서버는 재시작해야 바뀐다. 그 사이에
+            # 새 CLI가 옛 서버를 만나므로 없는 키로 죽지 않게 둔다.
+            "- copy role (listen only): "
+            + usage.get("copy_role", 'dispatch reply --ref ROLE "..."'),
             f"- request review/approval: {usage['request_review']} / {usage['request_approval']}",
             f"- work: {usage['work_start']} / {usage['work_report']} / {usage['work_done']}",
             f"- recovery: {usage['recovery']}",
