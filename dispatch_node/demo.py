@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -161,6 +162,10 @@ class DaemonLauncher(DemoLauncher):
             daemon=True,
         )
         supervisor_thread.start()
+        # SIGTERM은 기본 처리에서 finally를 안 돌린다. 그러면 우리가 띄운 서버가
+        # 고아로 남고, 다음 daemon은 8787이 살아 있으니 자기 서버를 안 띄운 채
+        # 옛 서버를 그대로 쓴다. 재시작했다고 믿는데 옛 코드가 도는 상태가 된다.
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
         try:
             print(
                 f"Dispatch daemon is running at http://{self.control_host}:"
