@@ -655,7 +655,7 @@ def test_project_bootstrap_returns_agent_specific_role_directory(tmp_path):
         assert bootstrap["own_role"]["name"] == "dev-lead"
         assert bootstrap["roles"][0]["self"] is True
         assert bootstrap["roles"][1]["assigned"] is False
-        assert bootstrap["usage"]["reply_pm"] == 'dispatch reply "내용"'
+        assert bootstrap["usage"]["reply_pm"] == 'dispatch reply "..."'
         assert bootstrap["usage"]["history"] == "dispatch history 20"
         assert "dispatch history 20" in bootstrap["usage"]["recovery"]
         assert len(bootstrap["revision"]) == 12

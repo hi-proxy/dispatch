@@ -194,17 +194,19 @@ def format_bootstrap(value: dict) -> str:
             f"- recovery: {usage['recovery']}",
             "Use role names as stable addresses. Report results and blockers through Dispatch.",
             # 명령 목록만으로는 언제 쓰는지 모른다. 새 세션마다 맥락 없이
-            # 시작하므로 규범을 함께 준다.
-            "위험하거나 되돌릴 수 없는 작업은 실행하기 전에 "
-            f"{usage['request_approval']}로 먼저 묻는다. "
-            "터미널 권한 확인 화면에서 기다리면 PM은 무엇을 묻는지 알 수 없다.",
+            # 시작하므로 규범을 함께 준다. 규범은 지시문이라 영어로 둔다.
+            "Ask before anything risky or irreversible: "
+            f"{usage['request_approval']}. "
+            "Waiting at the terminal permission prompt tells PM nothing.",
             # 참조가 지시로 읽히면 서로 답장을 물고 늘어진다. 남에게 보낼 때도
             # 받을 때도 같은 규칙이라 한 줄로 묶어 둔다.
-            "inbox의 for_me=false는 참조다. 맥락으로만 두고 답하지 않는다. "
-            "사실이 틀렸을 때만 짧게 바로잡는다. 남이 알아두기만 하면 될 때는 "
-            "수신자가 아니라 참조로 보낸다.",
-            "inbox의 chain은 PM 발화 이후 에이전트끼리 오간 횟수다. 막지 않으니 "
-            "필요하면 이어가되, 보탤 사실이 없으면 멈춘다.",
+            "for_me=false means you were copied. Read it, do not act on it, "
+            "do not reply. Correct it only if a fact is wrong. "
+            "When someone only needs to know, copy them instead of addressing them.",
+            "chain counts agent turns since PM last spoke. It is not a limit: "
+            "keep going if it helps, stop when you have nothing to add.",
+            # 언어를 못박으면 PM이 바뀔 때마다 고쳐야 한다. PM을 따라가게 둔다.
+            "Write messages in the language PM uses.",
         ]
     )
 
@@ -321,16 +323,16 @@ def emit_inbox(messages: list[dict]) -> None:
         print('Reply with: dispatch reply "YOUR MESSAGE"', file=sys.stderr)
         if any(message.get("is_reference") for message in messages):
             print(
-                'for_me=false는 참조다. 맥락으로만 두고 답하지 않는다. '
-                "사실이 틀렸을 때만 짧게 바로잡는다.",
+                "for_me=false means you were copied. Read it, do not act on it, "
+                "do not reply. Correct it only if a fact is wrong.",
                 file=sys.stderr,
             )
         chain = max(int(message.get("agent_chain") or 0) for message in messages)
         if chain >= CHAIN_NOTICE:
             print(
-                f"PM 발화 이후 에이전트끼리 {chain}번 오갔다. "
-                "보탤 사실이 없으면 여기서 멈춘다. "
-                "판단이 필요하면 PM에게 dispatch request로 묻는다.",
+                f"{chain} agent turns since PM last spoke. "
+                "Stop here unless you have a fact to add. "
+                "Ask PM with dispatch request if a decision is needed.",
                 file=sys.stderr,
             )
         print(
