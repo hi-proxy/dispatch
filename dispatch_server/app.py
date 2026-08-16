@@ -328,16 +328,27 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
                 role_id=role_id,
                 agent_id=payload.agent_id,
                 assigned_by=payload.assigned_by,
-                onboarding_sent=payload.send_onboarding and bool(prompt)
-                and is_new_assignment,
+                onboarding_sent=payload.send_onboarding and is_new_assignment,
             )
-            if payload.send_onboarding and prompt and is_new_assignment:
+            if payload.send_onboarding and is_new_assignment:
+                # 역할 설명이 비어 있어도 보낸다. 안 보내면 에이전트는 자기가
+                # 배정된 줄도 모르고, PM은 앱에서 보냈다고 믿는다.
+                #
+                # 호출문에 프로젝트 ID를 늘 싣는다. 이게 없으면 에이전트는
+                # 배정된 건 아는데 자기 방 번호를 몰라 dispatch init을 못 하고
+                # PM에게 되묻는다.
+                lines = [
+                    "[dispatch:init] 사용법과 현재 역할 구성을 불러오세요: "
+                    f"dispatch init --project {role['workspace_id']}"
+                ]
+                if prompt:
+                    lines.append(prompt)
                 _, onboarding_events = db.send_message(
                     workspace_id=role["workspace_id"],
                     sender_id=payload.assigned_by,
                     recipient_ids=[payload.agent_id],
                     role_ids=[],
-                    body=prompt,
+                    body="\n\n".join(lines),
                     tags=["onboarding"],
                 )
                 events.extend(onboarding_events)

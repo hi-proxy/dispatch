@@ -154,3 +154,25 @@ def test_supervisor_recovers_claim_when_reading_turn_ended_while_down(
     assert registry.claim("agent-1") is None
     assert registry.outstanding_wake("agent-1") is None
     registry.close()
+
+
+def test_daemon_starts_with_no_connected_agents(tmp_path, monkeypatch):
+    """앱이 이 daemon을 띄우고, 에이전트를 연결하는 길은 그 앱뿐이다.
+
+    여기서 막으면 처음 켜는 사람은 daemon도 못 띄우고 에이전트도 못 붙인다.
+    앱은 stderr를 버려서 화면에는 이유 없는 실패만 남는다.
+    """
+    from dispatch_node import demo
+
+    served = threading.Event()
+    monkeypatch.setattr(demo.DaemonLauncher, "_start_server", lambda self: None)
+    monkeypatch.setattr(demo.NodeSupervisor, "run_forever", lambda *a, **k: None)
+    monkeypatch.setattr(demo, "run_web", lambda *a, **k: served.set())
+
+    demo.DaemonLauncher(
+        registry_path=tmp_path / "node.db",
+        server_db_path=tmp_path / "server.db",
+        server_url="http://127.0.0.1:8787",
+    ).run()
+
+    assert served.is_set()

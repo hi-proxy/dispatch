@@ -530,7 +530,10 @@ def test_role_address_queues_until_assignment_and_preserves_history(tmp_path):
         delivered = client.get(
             "/v1/messages", params={"recipient": "agent-a", "after": 0}
         ).json()
-        assert [item["body"] for item in delivered] == ["queued task", "You own front1."]
+        assert [item["body"] for item in delivered][0] == "queued task"
+        onboarding = delivered[1]["body"]
+        assert "dispatch init --project local" in onboarding
+        assert onboarding.endswith("You own front1.")
         assert delivered[0]["role_recipients"][0]["name"] == "front1"
 
         client.delete(f"/v1/roles/{role['id']}/assignment")
@@ -707,3 +710,33 @@ def test_project_history_supports_compaction_restore_after_sequence(tmp_path):
                 "recipient_ids": ["agent"], "body": "x" * 20001,
             },
         ).status_code == 422
+
+
+def test_assignment_always_carries_the_project_id(tmp_path):
+    """역할 설명이 비어도 배정은 말을 걸어야 한다.
+
+    안 보내면 에이전트는 자기가 배정된 줄도 모르고, PM은 앱에서 보냈다고
+    믿는다. 프로젝트 ID가 없으면 배정된 건 알아도 자기 방 번호를 몰라
+    dispatch init을 못 하고 PM에게 되묻는다. 8/16 실측에서 그대로 겪었다.
+    """
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        for principal_id, kind in (("pm", "human"), ("agent-a", "agent")):
+            client.put(
+                f"/v1/principals/{principal_id}",
+                json={"id": principal_id, "kind": kind, "display_name": principal_id},
+            )
+        role = client.post(
+            "/v1/workspaces/local/roles", json={"name": "tester", "onboarding_prompt": ""}
+        ).json()
+        assigned = client.put(
+            f"/v1/roles/{role['id']}/assignment",
+            json={"agent_id": "agent-a", "assigned_by": "pm", "send_onboarding": True},
+        ).json()
+        assert assigned["onboarding_sent"] is True
+
+        delivered = client.get(
+            "/v1/messages", params={"recipient": "agent-a", "after": 0}
+        ).json()
+        assert len(delivered) == 1
+        assert "dispatch init --project local" in delivered[0]["body"]
