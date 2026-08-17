@@ -70,9 +70,25 @@ if not messages:
     print("{}")
     raise SystemExit
 
-lines = ["[dispatch] 새 메시지 %d건. 답은 dispatch reply로 보낸다." % len(messages)]
+# 참조 표시를 지우지 않는다. inbox의 for_me를 여기서 버리면 규범이
+# "for_me=false면 답하지 않는다"라고 해도 근거가 사라진다. 남에게 온 말에
+# 답하게 되는 자리다.
+mine = [m for m in messages if m.get("for_me", True)]
+copied = [m for m in messages if not m.get("for_me", True)]
+head = "[dispatch] 새 메시지 %d건" % len(messages)
+if mine:
+    head += ". 답은 dispatch reply로 보낸다."
+else:
+    head += ". 전부 참조다 — 맥락으로만 두고 답하지 않는다."
+lines = [head]
 for m in messages:
-    lines.append("#%s %s: %s" % (m.get("seq"), m.get("from"), (m.get("body") or "").strip()))
+    mark = "" if m.get("for_me", True) else " [참조]"
+    lines.append(
+        "#%s %s%s: %s"
+        % (m.get("seq"), m.get("from"), mark, (m.get("body") or "").strip())
+    )
+if mine and copied:
+    lines.append("[참조] 표시는 남에게 온 말이다. 답하지 않는다.")
 
 print(json.dumps({
     "hookSpecificOutput": {
