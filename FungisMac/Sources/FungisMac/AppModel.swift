@@ -429,10 +429,18 @@ final class AppModel: ObservableObject {
         referenceRoles.formIntersection(availableRoles)
         // 역할은 이 프로젝트 소속이라 자동으로 골라도 안전하다. 세션 목록은
         // 전역이므로 자동으로 고르면 다른 방 담당에게 발송될 수 있다.
-        if selectedTargets.isEmpty, selectedRoles.isEmpty,
+        //
+        // 처음 들어온 방에서만 고른다. 매번 고르면 PM이 지운 선택이 되살아나고,
+        // 참조만 남긴 상태도 수신자가 붙어 되돌아온다 — 방마다 기억해 둔 것이
+        // 그때마다 덮인다.
+        if recipientMemory[fresh.projectID] == nil,
+           selectedTargets.isEmpty, selectedRoles.isEmpty, referenceRoles.isEmpty,
            let firstRole = fresh.roles.first?.id {
             selectedRoles.insert(firstRole)
         }
+        recipientMemory[fresh.projectID] = RecipientSelection(
+            targets: selectedTargets, roles: selectedRoles, references: referenceRoles
+        )
         isConnected = true
         errorMessage = nil
         // 타임라인이 역순으로 쌓이므로 과거는 레이아웃 뒤쪽에 붙는다. 이미
