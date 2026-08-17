@@ -1,6 +1,6 @@
-from dispatch_node.cmux import CmuxAgentCandidate
-from dispatch_node.registry import LocalRegistry
-from dispatch_node.tui import ConnectionController
+from fungis_node.cmux import CmuxAgentCandidate
+from fungis_node.registry import LocalRegistry
+from fungis_node.tui import ConnectionController
 
 
 def candidate(*, verified=True):

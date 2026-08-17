@@ -2,18 +2,18 @@ import json
 
 import pytest
 
-from dispatch_node.agent_cli import (
+from fungis_node.agent_cli import (
     active_project, compact_history, emit_inbox, format_bootstrap, load_config,
     parser, stored_echo,
     write_error_message,
 )
-from dispatch_node.install import install_agent_cli
-from dispatch_node.pm import PMClient
-from dispatch_node.registry import LocalRegistry
+from fungis_node.install import install_agent_cli
+from fungis_node.pm import PMClient
+from fungis_node.registry import LocalRegistry
 
 
 def test_install_agent_cli_writes_short_launcher_and_private_config(tmp_path):
-    executable = tmp_path / "bin" / "dispatch"
+    executable = tmp_path / "bin" / "fungis"
     config = tmp_path / "config" / "agent.json"
     result = install_agent_cli(
         registry_path=tmp_path / "node.db",
@@ -23,7 +23,7 @@ def test_install_agent_cli_writes_short_launcher_and_private_config(tmp_path):
     )
     assert result == {"executable": str(executable), "config": str(config)}
     assert executable.read_text().startswith("#!/bin/sh\nexec ")
-    assert "dispatch_node.agent_cli" in executable.read_text()
+    assert "fungis_node.agent_cli" in executable.read_text()
     assert executable.stat().st_mode & 0o111
     assert config.stat().st_mode & 0o077 == 0
     assert load_config(config) == {
@@ -44,7 +44,7 @@ def test_agent_config_rejects_missing_fields(tmp_path):
 
 
 def test_install_rejects_placeholder_server_before_writing(tmp_path):
-    executable = tmp_path / "bin" / "dispatch"
+    executable = tmp_path / "bin" / "fungis"
     config = tmp_path / "config" / "agent.json"
 
     with pytest.raises(ValueError, match="placeholder host"):
@@ -82,24 +82,24 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
                 {"name": "front", "self": False, "agent_name": None},
             ],
             "usage": {
-                "inbox": "dispatch inbox",
-                "history": "dispatch history 20",
-                "reply_pm": 'dispatch reply "..."',
-                "message_role": 'dispatch reply --role ROLE "..."',
-                "copy_role": 'dispatch reply --ref ROLE "..."',
-                "request_review": 'dispatch request --level r2 "..."',
-                "request_approval": 'dispatch request --level r3 "..."',
-                "work_start": 'dispatch work start "..."',
-                "work_report": 'dispatch work report "..."',
-                "work_done": 'dispatch work done "..."',
-                "recovery": "if inbox output was lost, dispatch history 20",
+                "inbox": "fungis inbox",
+                "history": "fungis history 20",
+                "reply_pm": 'fungis reply "..."',
+                "message_role": 'fungis reply --role ROLE "..."',
+                "copy_role": 'fungis reply --ref ROLE "..."',
+                "request_review": 'fungis request --level r2 "..."',
+                "request_approval": 'fungis request --level r3 "..."',
+                "work_start": 'fungis work start "..."',
+                "work_report": 'fungis work report "..."',
+                "work_done": 'fungis work done "..."',
+                "recovery": "if inbox output was lost, fungis history 20",
             },
         }
     )
     assert "you: @dev-lead" in output
     assert "roles: @dev-lead=you, @reviewer=Agent B, @front=unassigned" in output
-    assert "dispatch request --level r3" in output
-    assert "restore context: dispatch history 20" in output
+    assert "fungis request --level r3" in output
+    assert "restore context: fungis history 20" in output
     assert "recovery:" in output
     assert "for_me=false means you were copied" in output
     assert "language PM uses" in output
@@ -159,14 +159,14 @@ def test_history_is_shared_compact_context_and_send_echoes_stored_body():
             "seq": 17, "workspace_id": "project-1", "sender_id": "agent-a",
             "recipient_ids": ["pm"], "body": "exact stored text",
             "kind": "message", "reply_level": "r1", "in_reply_to": None,
-            "track": "design/ui-atlas", "tags": ["ticket/dispatch"],
+            "track": "design/ui-atlas", "tags": ["ticket/fungis"],
         },
         roles=[],
     )
     assert echo["stored"]["body"] == "exact stored text"
     assert echo["stored"]["body_chars"] == 17
     assert echo["stored"]["track"] == "design/ui-atlas"
-    assert echo["stored"]["tags"] == ["ticket/dispatch"]
+    assert echo["stored"]["tags"] == ["ticket/fungis"]
 
 
 def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
@@ -186,7 +186,7 @@ def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
     assert captured.out.count("\n") == 1
     assert "Reply with:" not in captured.out
     assert "Reply with:" in captured.err
-    assert "dispatch history 20" in captured.err
+    assert "fungis history 20" in captured.err
     assert "copied" not in captured.err
     assert "agent turns" not in captured.err
 
@@ -231,8 +231,8 @@ def test_message_help_documents_tracks_tags_roles_and_inheritance(capsys):
 
 def test_write_error_points_to_init_and_history_recovery():
     message = write_error_message(RuntimeError("server 409: role unavailable"))
-    assert "dispatch init --project PROJECT_ID" in message
-    assert "dispatch history 20" in message
+    assert "fungis init --project PROJECT_ID" in message
+    assert "fungis history 20" in message
 
 
 def test_reference_accepts_the_assignee_principal(monkeypatch):

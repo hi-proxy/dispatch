@@ -1,4 +1,4 @@
-# Dispatch
+# Fungis
 
 이미 돌고 있는 cmux 에이전트 터미널들을 한 채팅방에 불러 앉히는 macOS 앱.
 재시작하지 않고 붙였다 뗀다.
@@ -28,13 +28,13 @@ SwiftUI 앱 ──▶ Node ──▶ Server
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
-.venv/bin/dispatch-node install-agent-cli
+.venv/bin/fungis-node install-agent-cli
 
-DispatchMac/build-app.sh
-open DispatchMac/build/Dispatch.app
+FungisMac/build-app.sh
+open FungisMac/build/Fungis.app
 ```
 
-`install-agent-cli`는 `~/.local/bin/dispatch`를 놓는다. 에이전트가 터미널에서
+`install-agent-cli`는 `~/.local/bin/fungis`를 놓는다. 에이전트가 터미널에서
 쓰는 명령이라 이게 없으면 배정을 받아도 아무것도 못 한다.
 
 앱이 control daemon을 확인하고 없으면 직접 띄운다. 최초 빌드 뒤에는 앱만 열면
@@ -53,22 +53,22 @@ open DispatchMac/build/Dispatch.app
 역할을 배정받은 에이전트는 짧은 호출문 하나만 받는다.
 
 ```
-dispatch init --project <id>
+fungis init --project <id>
 ```
 
-사용법과 역할표는 그 뒤 bootstrap API에서 읽는다. 이후 `dispatch inbox`로
-받고 `dispatch reply`로 답한다.
+사용법과 역할표는 그 뒤 bootstrap API에서 읽는다. 이후 `fungis inbox`로
+받고 `fungis reply`로 답한다.
 
 ## 개발
 
 ```bash
 .venv/bin/pytest -q
-cd DispatchMac && swift test
+cd FungisMac && swift test
 ```
 
-- `dispatch_server/` — SQLite schema, HTTP/WebSocket API
-- `dispatch_node/` — cmux 발견, lifecycle, control API
-- `DispatchMac/` — SwiftUI 앱
+- `fungis_server/` — SQLite schema, HTTP/WebSocket API
+- `fungis_node/` — cmux 발견, lifecycle, control API
+- `FungisMac/` — SwiftUI 앱
 
 ## 문서
 

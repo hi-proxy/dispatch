@@ -1,9 +1,9 @@
 from fastapi.testclient import TestClient
 
-from dispatch_node.cmux import CmuxAgentCandidate
-from dispatch_node.registry import LocalRegistry
-from dispatch_node.web import create_web_app, pm_relation
-from dispatch_server.app import create_app
+from fungis_node.cmux import CmuxAgentCandidate
+from fungis_node.registry import LocalRegistry
+from fungis_node.web import create_web_app, pm_relation
+from fungis_server.app import create_app
 
 
 class FakeCmux:
@@ -56,7 +56,7 @@ def test_web_index_is_served(tmp_path):
     with TestClient(app) as client:
         response = client.get("/")
     assert response.status_code == 200
-    assert "Dispatch" in response.text
+    assert "Fungis" in response.text
 
 
 def test_control_health_does_not_require_server_or_cmux(tmp_path):
@@ -105,7 +105,7 @@ def test_web_state_and_send_wrap_existing_server_contract(tmp_path, monkeypatch)
         response.raise_for_status()
         return {} if response.status_code == 204 else response.json()
 
-    monkeypatch.setattr("dispatch_node.pm.PMClient._request", request)
+    monkeypatch.setattr("fungis_node.pm.PMClient._request", request)
     cmux = FakeCmux()
     registry = LocalRegistry(tmp_path / "node.db")
     registry.attach("agent-one", cmux.candidate)
@@ -176,7 +176,7 @@ def test_chat_state_is_ten_messages_and_history_pages_back_by_fifty(
         response.raise_for_status()
         return {} if response.status_code == 204 else response.json()
 
-    monkeypatch.setattr("dispatch_node.pm.PMClient._request", request)
+    monkeypatch.setattr("fungis_node.pm.PMClient._request", request)
     for principal_id, kind in (("pm-local", "human"), ("agent", "agent")):
         server.put(
             f"/v1/principals/{principal_id}",
@@ -231,7 +231,7 @@ def test_web_nickname_is_persisted_without_changing_routing_id(tmp_path, monkeyp
         response.raise_for_status()
         return {} if response.status_code == 204 else response.json()
 
-    monkeypatch.setattr("dispatch_node.pm.PMClient._request", request)
+    monkeypatch.setattr("fungis_node.pm.PMClient._request", request)
     cmux = FakeCmux()
     registry = LocalRegistry(tmp_path / "node.db")
     registry.attach("agent-one", cmux.candidate)
@@ -265,7 +265,7 @@ def test_project_repository_is_local_verified_and_in_snapshot(tmp_path, monkeypa
         response.raise_for_status()
         return {} if response.status_code == 204 else response.json()
 
-    monkeypatch.setattr("dispatch_node.pm.PMClient._request", request)
+    monkeypatch.setattr("fungis_node.pm.PMClient._request", request)
     repository = tmp_path / "repo"
     repository.mkdir()
     import subprocess

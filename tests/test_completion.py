@@ -1,7 +1,7 @@
-from dispatch_node.cmux import CmuxAgentCandidate
-from dispatch_node.completion import CompletionReconciler
-from dispatch_node.inbox import InboxWatcher
-from dispatch_node.registry import LocalRegistry
+from fungis_node.cmux import CmuxAgentCandidate
+from fungis_node.completion import CompletionReconciler
+from fungis_node.inbox import InboxWatcher
+from fungis_node.registry import LocalRegistry
 
 
 def candidate():
@@ -22,7 +22,7 @@ def candidate():
 
 class FakeInbox(InboxWatcher):
     def __init__(self, registry, messages=None):
-        super().__init__("http://dispatch.test", "agent-1", registry)
+        super().__init__("http://fungis.test", "agent-1", registry)
         self.messages = messages or []
         self.acks = []
 
@@ -81,7 +81,7 @@ def test_completed_stop_acks_matching_claim_once(tmp_path, monkeypatch):
         return {"processed_seq": through_seq}
 
     monkeypatch.setattr(InboxWatcher, "ack_processed", fake_ack)
-    reconciler = CompletionReconciler("http://dispatch.test", registry)
+    reconciler = CompletionReconciler("http://fungis.test", registry)
     assert reconciler.handle_event(stop_event())["through_seq"] == 4
     assert reconciler.handle_event(stop_event()) is None
     assert calls == [(principal_id, 4)]

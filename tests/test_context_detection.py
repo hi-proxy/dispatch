@@ -1,17 +1,17 @@
-from dispatch_node.context_detection import detect_contexts
+from fungis_node.context_detection import detect_contexts
 
 
 def test_detects_only_verified_branch_and_commit():
     contexts = [{
-        "branches": ["main", "feature/dispatch-tracks"],
+        "branches": ["main", "feature/fungis-tracks"],
         "head": "abcdef123456",
     }]
     found = detect_contexts(
-        "feature/dispatch-tracks에서 ARC-42를 abcdef1로 검증", contexts,
+        "feature/fungis-tracks에서 ARC-42를 abcdef1로 검증", contexts,
         verified_commits={"abcdef1"},
     )
     assert found == [
-        {"kind": "branch", "value": "feature/dispatch-tracks", "verified": True},
+        {"kind": "branch", "value": "feature/fungis-tracks", "verified": True},
         {"kind": "commit", "value": "abcdef1", "verified": True},
     ]
 

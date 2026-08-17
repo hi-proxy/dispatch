@@ -1,0 +1,596 @@
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+from collections import defaultdict
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+
+from .db import FungisDB
+from .schemas import (
+    AckRequest, BindingUpsert, MessageCreate, NodeUpsert, PrincipalCreate,
+    BookmarkCreate,
+    PMProfileUpdate, ProjectCreate, ProjectUpdate,
+    RoleAssignmentUpsert, RoleCreate, RoleUpdate,
+    SharedValueUpsert,
+    TimelinePinCreate,
+    WorkStart, WorkUpdate,
+    PermissionRequestCreate,
+    PermissionResolve,
+)
+
+
+class EventHub:
+    def __init__(self) -> None:
+        self._connections: dict[str, set[WebSocket]] = defaultdict(set)
+        self._lock = asyncio.Lock()
+
+    async def connect(self, recipient_id: str, websocket: WebSocket) -> None:
+        await websocket.accept()
+        async with self._lock:
+            self._connections[recipient_id].add(websocket)
+
+    async def disconnect(self, recipient_id: str, websocket: WebSocket) -> None:
+        async with self._lock:
+            self._connections[recipient_id].discard(websocket)
+            if not self._connections[recipient_id]:
+                self._connections.pop(recipient_id, None)
+
+    async def publish(self, event: dict) -> None:
+        async with self._lock:
+            targets = list(self._connections.get(event["recipient_id"], set()))
+        stale: list[WebSocket] = []
+        for websocket in targets:
+            try:
+                await websocket.send_json(event)
+            except Exception:
+                stale.append(websocket)
+        for websocket in stale:
+            await self.disconnect(event["recipient_id"], websocket)
+
+
+def create_app(database_path: str | Path | None = None) -> FastAPI:
+    if database_path is None:
+        database_path = os.environ.get(
+            "FUNGIS_DB", str(Path(tempfile.gettempdir()) / "fungis.db")
+        )
+    db = FungisDB(database_path)
+    hub = EventHub()
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        yield
+        db.close()
+
+    app = FastAPI(title="Fungis", version="0.1.0", lifespan=lifespan)
+    app.state.db = db
+    app.state.hub = hub
+
+    @app.get("/health")
+    def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.post("/v1/principals", status_code=201)
+    def create_principal(payload: PrincipalCreate) -> dict:
+        try:
+            return db.create_principal(
+                kind=payload.kind,
+                display_name=payload.display_name,
+                principal_id=payload.id,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.put("/v1/principals/{principal_id}")
+    def upsert_principal(principal_id: str, payload: PrincipalCreate) -> dict:
+        if payload.id is not None and payload.id != principal_id:
+            raise HTTPException(status_code=400, detail="principal id mismatch")
+        try:
+            return db.upsert_principal(
+                principal_id=principal_id,
+                kind=payload.kind,
+                display_name=payload.display_name,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/v1/projects")
+    def projects() -> list[dict]:
+        return db.projects()
+
+    @app.post("/v1/projects", status_code=201)
+    def create_project(payload: ProjectCreate) -> dict:
+        try:
+            return db.create_project(name=payload.name, project_id=payload.id)
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.patch("/v1/projects/{project_id}")
+    def update_project(project_id: str, payload: ProjectUpdate) -> dict:
+        try:
+            return db.update_project(project_id=project_id, name=payload.name)
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/v1/pm-profiles/{principal_id}")
+    def pm_profile(principal_id: str) -> dict:
+        try:
+            return db.pm_profile(principal_id)
+        except Exception as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.patch("/v1/pm-profiles/{principal_id}")
+    def update_pm_profile(principal_id: str, payload: PMProfileUpdate) -> dict:
+        try:
+            return db.update_pm_profile(
+                principal_id=principal_id, display_name=payload.display_name
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.put("/v1/pm-profiles/{principal_id}/avatar")
+    async def set_pm_avatar(principal_id: str, request: Request) -> dict:
+        media_type = request.headers.get("content-type", "")
+        if media_type not in {"image/jpeg", "image/png", "image/gif"}:
+            raise HTTPException(status_code=415, detail="unsupported avatar image type")
+        data = await request.body()
+        if not data or len(data) > 2_000_000:
+            raise HTTPException(status_code=413, detail="avatar must be 1 byte to 2 MB")
+        try:
+            return db.set_pm_avatar(
+                principal_id=principal_id, data=data, media_type=media_type
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/v1/pm-profiles/{principal_id}/avatar")
+    def pm_avatar(principal_id: str) -> Response:
+        value = db.pm_avatar(principal_id)
+        if value is None:
+            raise HTTPException(status_code=404, detail="PM avatar not found")
+        data, media_type = value
+        return Response(content=data, media_type=media_type)
+
+    @app.delete("/v1/pm-profiles/{principal_id}/avatar", status_code=204)
+    def delete_pm_avatar(principal_id: str) -> None:
+        try:
+            db.set_pm_avatar(principal_id=principal_id, data=None, media_type=None)
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.put("/v1/nodes/{node_id}")
+    def upsert_node(node_id: str, payload: NodeUpsert) -> dict:
+        if node_id != payload.id:
+            raise HTTPException(status_code=400, detail="node id mismatch")
+        return db.upsert_node(node_id=node_id, display_name=payload.display_name)
+
+    @app.put("/v1/bindings/{agent_id}")
+    def upsert_binding(agent_id: str, payload: BindingUpsert) -> dict:
+        if agent_id != payload.agent_id:
+            raise HTTPException(status_code=400, detail="agent id mismatch")
+        try:
+            return db.upsert_binding(payload.model_dump())
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.delete("/v1/bindings/{agent_id}", status_code=204)
+    def detach_binding(agent_id: str) -> None:
+        if not db.detach_binding(agent_id):
+            raise HTTPException(status_code=404, detail="active binding not found")
+
+    @app.post("/v1/permission-requests", status_code=201)
+    def create_permission_request(payload: PermissionRequestCreate) -> dict:
+        return db.create_permission_request(
+            workspace_id=payload.workspace_id,
+            session_id=payload.session_id,
+            agent_id=payload.agent_id,
+            tool_name=payload.tool_name,
+            tool_input=payload.tool_input,
+            suggestions=payload.suggestions,
+        )
+
+    @app.get("/v1/permission-requests/{request_id}")
+    def read_permission_request(request_id: str) -> dict:
+        found = db.permission_request(request_id)
+        if found is None:
+            raise HTTPException(status_code=404, detail="permission request not found")
+        return found
+
+    @app.patch("/v1/permission-requests/{request_id}")
+    def resolve_permission_request(request_id: str, payload: PermissionResolve) -> dict:
+        found = db.resolve_permission_request(
+            request_id=request_id,
+            status=payload.status,
+            resolved_by=payload.resolved_by,
+        )
+        if found is None:
+            raise HTTPException(status_code=404, detail="permission request not found")
+        return found
+
+    @app.get("/v1/workspaces/{workspace_id}/permission-requests")
+    def pending_permission_requests(workspace_id: str) -> list[dict]:
+        return db.pending_permission_requests(workspace_id)
+
+    @app.post("/v1/messages", status_code=201)
+    async def send_message(payload: MessageCreate) -> dict:
+        in_reply_to = payload.in_reply_to
+        if payload.in_reply_to_project_seq is not None:
+            if in_reply_to is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="in_reply_to and in_reply_to_project_seq are mutually exclusive",
+                )
+            in_reply_to = db.global_seq(
+                workspace_id=payload.workspace_id,
+                project_seq=payload.in_reply_to_project_seq,
+            )
+            if in_reply_to is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"message {payload.in_reply_to_project_seq} not found in this project",
+                )
+        try:
+            message, events = db.send_message(
+                workspace_id=payload.workspace_id,
+                sender_id=payload.sender_id,
+                recipient_ids=payload.recipient_ids,
+                role_ids=payload.role_ids,
+                reference_ids=payload.reference_ids,
+                body=payload.body,
+                message_id=payload.id,
+                kind=payload.kind,
+                reply_level=payload.reply_level,
+                in_reply_to=in_reply_to,
+                track=payload.track,
+                tags=payload.tags,
+                inherit_context=payload.inherit_context,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        for event in events:
+            await hub.publish(event)
+        return message
+
+    @app.get("/v1/workspaces/{workspace_id}/roles")
+    def roles(workspace_id: str) -> list[dict]:
+        return db.roles(workspace_id)
+
+    @app.post("/v1/workspaces/{workspace_id}/roles", status_code=201)
+    def create_role(workspace_id: str, payload: RoleCreate) -> dict:
+        try:
+            return db.create_role(
+                workspace_id=workspace_id,
+                name=payload.name,
+                onboarding_prompt=payload.onboarding_prompt,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.patch("/v1/roles/{role_id}")
+    def update_role(role_id: str, payload: RoleUpdate) -> dict:
+        try:
+            return db.update_role(
+                role_id=role_id,
+                name=payload.name,
+                onboarding_prompt=payload.onboarding_prompt,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.delete("/v1/roles/{role_id}", status_code=204)
+    def delete_role(role_id: str) -> None:
+        try:
+            if not db.delete_role(role_id):
+                raise HTTPException(status_code=404, detail="role not found")
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.put("/v1/roles/{role_id}/avatar")
+    async def set_role_avatar(role_id: str, request: Request) -> dict:
+        media_type = request.headers.get("content-type", "")
+        if media_type not in {"image/jpeg", "image/png", "image/gif"}:
+            raise HTTPException(status_code=415, detail="unsupported avatar image type")
+        data = await request.body()
+        if not data or len(data) > 2_000_000:
+            raise HTTPException(status_code=413, detail="avatar must be 1 byte to 2 MB")
+        try:
+            return db.set_role_avatar(role_id=role_id, data=data, media_type=media_type)
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.get("/v1/roles/{role_id}/avatar")
+    def role_avatar(role_id: str) -> Response:
+        value = db.role_avatar(role_id)
+        if value is None:
+            raise HTTPException(status_code=404, detail="role avatar not found")
+        data, media_type = value
+        return Response(content=data, media_type=media_type)
+
+    @app.delete("/v1/roles/{role_id}/avatar", status_code=204)
+    def delete_role_avatar(role_id: str) -> None:
+        try:
+            db.set_role_avatar(role_id=role_id, data=None, media_type=None)
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.put("/v1/roles/{role_id}/assignment")
+    async def assign_role(role_id: str, payload: RoleAssignmentUpsert) -> dict:
+        try:
+            current = db.role(role_id)
+            prompt = current["onboarding_prompt"]
+            is_new_assignment = current.get("agent_id") != payload.agent_id
+            role, events = db.assign_role(
+                role_id=role_id,
+                agent_id=payload.agent_id,
+                assigned_by=payload.assigned_by,
+                onboarding_sent=payload.send_onboarding and is_new_assignment,
+            )
+            if payload.send_onboarding and is_new_assignment:
+                # 역할 설명이 비어 있어도 보낸다. 안 보내면 에이전트는 자기가
+                # 배정된 줄도 모르고, PM은 앱에서 보냈다고 믿는다.
+                #
+                # 호출문에 프로젝트 ID를 늘 싣는다. 이게 없으면 에이전트는
+                # 배정된 건 아는데 자기 방 번호를 몰라 fungis init을 못 하고
+                # PM에게 되묻는다.
+                lines = [
+                    "[fungis:init] 사용법과 현재 역할 구성을 불러오세요: "
+                    f"fungis init --project {role['workspace_id']}"
+                ]
+                if prompt:
+                    lines.append(prompt)
+                _, onboarding_events = db.send_message(
+                    workspace_id=role["workspace_id"],
+                    sender_id=payload.assigned_by,
+                    recipient_ids=[payload.agent_id],
+                    role_ids=[],
+                    body="\n\n".join(lines),
+                    tags=["onboarding"],
+                )
+                events.extend(onboarding_events)
+            for event in events:
+                await hub.publish(event)
+            return role
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.delete("/v1/roles/{role_id}/assignment", status_code=204)
+    def unassign_role(role_id: str) -> None:
+        if not db.unassign_role(role_id):
+            raise HTTPException(status_code=404, detail="active assignment not found")
+
+    @app.get("/v1/roles/{role_id}/assignments")
+    def assignment_history(role_id: str) -> list[dict]:
+        return db.assignment_history(role_id)
+
+    @app.get("/v1/agent-role-memberships")
+    def active_agent_roles() -> list[dict]:
+        return db.active_agent_roles()
+
+    @app.get("/v1/projects/{project_id}/bootstrap")
+    def project_bootstrap(
+        project_id: str,
+        agent_id: str = Query(min_length=1),
+        pm_id: str = Query(min_length=1),
+    ) -> dict:
+        try:
+            return db.project_bootstrap(
+                project_id=project_id, agent_id=agent_id, pm_id=pm_id
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.get("/v1/messages")
+    def messages(
+        recipient: str = Query(min_length=1), after: int = Query(default=0, ge=0)
+    ) -> list[dict]:
+        return db.messages_after(recipient_id=recipient, after=after)
+
+    @app.get("/v1/timeline/{principal_id}")
+    def timeline(
+        principal_id: str, limit: int = Query(default=100, ge=1, le=500)
+    ) -> list[dict]:
+        return db.timeline(principal_id, limit)
+
+    @app.get("/v1/attention/{principal_id}")
+    def attention(principal_id: str) -> list[dict]:
+        return db.attention(principal_id)
+
+    @app.get("/v1/workspaces/{workspace_id}/timeline")
+    def workspace_timeline(
+        workspace_id: str,
+        limit: int = Query(default=100, ge=1, le=500),
+        after: int | None = Query(default=None, ge=0),
+        after_project_seq: int | None = Query(default=None, ge=0),
+        before: int | None = Query(default=None, gt=0),
+    ) -> list[dict]:
+        if after is not None and before is not None:
+            raise HTTPException(status_code=422, detail="after and before are mutually exclusive")
+        if after_project_seq is not None:
+            # 에이전트는 방별 표시 번호로 복구 지점을 말한다.
+            if after is not None or before is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="after_project_seq cannot be combined with after or before",
+                )
+            after = db.global_seq(
+                workspace_id=workspace_id, project_seq=after_project_seq
+            )
+            if after is None:
+                after = 0
+        return db.workspace_timeline(workspace_id, limit, after, before)
+
+    @app.get("/v1/workspaces/{workspace_id}/attention")
+    def workspace_attention(workspace_id: str) -> list[dict]:
+        return db.workspace_attention(workspace_id)
+
+    @app.get("/v1/workspaces/{workspace_id}/bookmarks")
+    def bookmarks(workspace_id: str) -> list[dict]:
+        return db.bookmarks(workspace_id)
+
+    @app.post(
+        "/v1/workspaces/{workspace_id}/messages/{message_seq}/bookmarks",
+        status_code=201,
+    )
+    def create_bookmark(
+        workspace_id: str, message_seq: int, payload: BookmarkCreate
+    ) -> dict:
+        try:
+            return db.create_bookmark(
+                workspace_id=workspace_id, message_seq=message_seq,
+                label=payload.label, created_by=payload.created_by,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.delete(
+        "/v1/workspaces/{workspace_id}/bookmarks/{bookmark_id}", status_code=204
+    )
+    def delete_bookmark(workspace_id: str, bookmark_id: str) -> None:
+        if not db.delete_bookmark(
+            workspace_id=workspace_id, bookmark_id=bookmark_id
+        ):
+            raise HTTPException(status_code=404, detail="bookmark not found")
+
+    @app.get("/v1/workspaces/{workspace_id}/timeline-pins")
+    def timeline_pins(workspace_id: str) -> list[dict]:
+        return db.timeline_pins(workspace_id)
+
+    @app.post(
+        "/v1/workspaces/{workspace_id}/messages/{message_seq}/timeline-pins",
+        status_code=201,
+    )
+    def create_timeline_pin(
+        workspace_id: str, message_seq: int, payload: TimelinePinCreate
+    ) -> dict:
+        try:
+            return db.create_timeline_pin(
+                workspace_id=workspace_id, after_message_seq=message_seq,
+                label=payload.label, created_by=payload.created_by,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.delete(
+        "/v1/workspaces/{workspace_id}/timeline-pins/{pin_id}", status_code=204
+    )
+    def delete_timeline_pin(workspace_id: str, pin_id: str) -> None:
+        if not db.delete_timeline_pin(workspace_id=workspace_id, pin_id=pin_id):
+            raise HTTPException(status_code=404, detail="timeline pin not found")
+
+    @app.get("/v1/shared/{workspace_id}")
+    def shared_values(
+        workspace_id: str, keys: list[str] | None = Query(default=None)
+    ) -> list[dict]:
+        return db.shared_values(workspace_id=workspace_id, keys=keys)
+
+    @app.put("/v1/shared/{workspace_id}/{key}")
+    def upsert_shared_value(
+        workspace_id: str,
+        key: str,
+        payload: SharedValueUpsert,
+        updated_by: str = Query(min_length=1),
+    ) -> dict:
+        try:
+            return db.upsert_shared_value(
+                workspace_id=workspace_id,
+                key=key,
+                value=payload.value,
+                updated_by=updated_by,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.delete("/v1/shared/{workspace_id}/{key}", status_code=204)
+    def delete_shared_value(workspace_id: str, key: str) -> None:
+        if not db.delete_shared_value(workspace_id=workspace_id, key=key):
+            raise HTTPException(status_code=404, detail="shared key not found")
+
+    @app.post("/v1/work", status_code=201)
+    def start_work(payload: WorkStart) -> dict:
+        try:
+            return db.start_work(
+                workspace_id=payload.workspace_id,
+                agent_id=payload.agent_id,
+                title=payload.title,
+            )
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/v1/work/{agent_id}/report")
+    def report_work(agent_id: str, payload: WorkUpdate) -> dict:
+        try:
+            return db.update_active_work(
+                agent_id=agent_id, report=payload.report, done=False
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post("/v1/work/{agent_id}/done")
+    def finish_work(agent_id: str, payload: WorkUpdate) -> dict:
+        try:
+            return db.update_active_work(
+                agent_id=agent_id, report=payload.report, done=True
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.get("/v1/work/{workspace_id}")
+    def work_items(
+        workspace_id: str, limit: int = Query(default=100, ge=1, le=500)
+    ) -> list[dict]:
+        return db.work_items(workspace_id=workspace_id, limit=limit)
+
+    @app.post("/v1/inbox/ack-received")
+    def ack_received(payload: AckRequest) -> dict:
+        try:
+            return db.ack(
+                recipient_id=payload.recipient_id,
+                through_seq=payload.through_seq,
+                processed=False,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.post("/v1/inbox/ack-processed")
+    def ack_processed(payload: AckRequest) -> dict:
+        try:
+            return db.ack(
+                recipient_id=payload.recipient_id,
+                through_seq=payload.through_seq,
+                processed=True,
+            )
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+
+    @app.get("/v1/inbox/state/{recipient_id}")
+    def inbox_state(recipient_id: str) -> dict:
+        return db.inbox_state(recipient_id)
+
+    @app.websocket("/v1/events/{recipient_id}")
+    async def events(websocket: WebSocket, recipient_id: str, after: int = 0) -> None:
+        await hub.connect(recipient_id, websocket)
+        try:
+            for event in db.delivery_events_after(
+                recipient_id=recipient_id, after=after
+            ):
+                await websocket.send_json(event)
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            await hub.disconnect(recipient_id, websocket)
+
+    return app
+
+
+app = create_app()

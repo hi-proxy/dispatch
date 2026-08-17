@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fungis</title>
+  <link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div><span class="mark">F</span><strong>Fungis</strong><span class="sub">agent control room</span></div>
+      <div id="connection" class="connection">connecting</div>
+    </header>
+    <aside>
+      <nav>
+        <button class="nav active" data-view="chat">Chat <span id="attention-count"></span></button>
+        <button class="nav" data-view="agents">Agents</button>
+        <button class="nav" data-view="shared">Shared</button>
+        <button class="nav" data-view="work">Work</button>
+      </nav>
+      <div class="agent-rail"><div class="eyebrow">CONNECTED</div><div id="targets"></div></div>
+    </aside>
+    <main>
+      <section id="chat" class="view active">
+        <div class="view-head"><div><h1>Conversation</h1><p>작업 흐름과 승인 요청을 한곳에서 관리합니다.</p></div><select id="recipient"></select></div>
+        <div id="attention" class="attention"></div>
+        <div id="timeline" class="timeline"></div>
+        <form id="composer" class="composer"><textarea id="message" rows="2" placeholder="선택한 에이전트에게 메시지… (⌘ Enter)"></textarea><button type="submit">Send</button></form>
+      </section>
+      <section id="agents" class="view"><div class="view-head"><div><h1>Agents</h1><p>열려 있는 cmux 에이전트를 재시작 없이 연결합니다.</p></div></div><div id="agent-grid" class="cards"></div></section>
+      <section id="shared" class="view"><div class="view-head"><div><h1>Shared</h1><p>에이전트가 키로 조회하는 작은 공용 SSOT입니다.</p></div><button id="add-shared">Add value</button></div><div id="shared-list" class="shared-list"></div></section>
+      <section id="work" class="view"><div class="view-head"><div><h1>Work</h1><p>에이전트가 보고한 작업과 경과 시간을 봅니다.</p></div></div><div id="work-list" class="cards"></div></section>
+    </main>
+  </div>
+  <div id="toast"></div>
+  <dialog id="shared-dialog"><form id="shared-form"><h2>Shared value</h2><label>Key<input id="shared-key" required></label><label>Value<textarea id="shared-value" rows="7" required></textarea></label><div class="dialog-actions"><button type="button" id="shared-cancel" class="quiet">Cancel</button><button type="submit">Save</button></div></form></dialog>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

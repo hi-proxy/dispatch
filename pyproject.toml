@@ -1,5 +1,5 @@
 [project]
-name = "dispatch"
+name = "fungis"
 version = "0.1.0"
 description = "A chat room for the agent terminals you already have running"
 requires-python = ">=3.12,<3.14"
@@ -16,19 +16,19 @@ dev = [
 ]
 
 [project.scripts]
-dispatch-server = "dispatch_server.main:run"
-dispatch-node = "dispatch_node.cli:main"
-dispatch = "dispatch_node.agent_cli:main"
+fungis-server = "fungis_server.main:run"
+fungis-node = "fungis_node.cli:main"
+fungis = "fungis_node.agent_cli:main"
 
 [build-system]
 requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["dispatch_server*", "dispatch_node*"]
+include = ["fungis_server*", "fungis_node*"]
 
 [tool.setuptools.package-data]
-dispatch_node = ["web_assets/*"]
+fungis_node = ["web_assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

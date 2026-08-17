@@ -2,7 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from dispatch_server.app import create_app
+from fungis_server.app import create_app
 
 
 def test_permission_request_round_trip(tmp_path):
@@ -64,7 +64,7 @@ def test_stale_pending_requests_stop_showing_as_cards(tmp_path, monkeypatch):
     받아갈 프로세스가 없다는 뜻이라, PM 화면에 눌러도 아무 일 없는 카드가
     쌓인다. 8/16 실측에서 서버 재시작과 겹쳐 그대로 남았다.
     """
-    from dispatch_server import db as db_module
+    from fungis_server import db as db_module
 
     with TestClient(create_app(tmp_path / "perm.db")) as client:
         created = client.post(
@@ -97,7 +97,7 @@ def test_gate_never_holds_the_terminal(tmp_path, monkeypatch):
     "걍 블로킹"으로 겪었다.
     """
     import io
-    from dispatch_node import agent_cli
+    from fungis_node import agent_cli
 
     polled = []
 
@@ -137,7 +137,7 @@ def test_clear_removes_only_this_session_notice(tmp_path, monkeypatch):
     입력창이 괜히 막혀 있었다. 같은 방의 다른 세션 것까지 걷으면 안 된다.
     """
     import io
-    from dispatch_node import agent_cli
+    from fungis_node import agent_cli
 
     resolved = []
 
