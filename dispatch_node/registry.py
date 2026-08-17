@@ -10,6 +10,11 @@ from typing import Any
 from .cmux import CmuxAgentCandidate
 
 
+# 깨우기 확인이 이 시간 안에 안 오면 없던 것으로 본다. 다시 깨우는 쪽이
+# 안전하다 — 호출문 한 줄이고 게이트가 빈 프롬프트를 확인한 뒤에만 넣는다.
+WAKE_CONFIRM_TTL_SECONDS = 600
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bindings (
     local_name TEXT PRIMARY KEY,
@@ -474,7 +479,27 @@ class LocalRegistry:
         }
 
     def outstanding_wake(self, recipient_id: str) -> dict[str, Any] | None:
+        """확인을 기다리는 깨우기. 늙은 것은 없는 것으로 본다.
+
+        확인이 한 번 유실되면 게이트가 이후 모든 깨우기를 영구히 거부한다.
+        그러면 그 에이전트는 다시는 안 깨어난다 — 메시지는 쌓이는데 아무도
+        모른다. 8/18에 실제로 걸렸다(8/17 21:28에 보낸 것이 하루 넘게 남아
+        메시지 5건을 막고 있었다).
+
+        다시 깨우는 쪽은 안전하다. 호출문 한 줄이고, 게이트가 빈 프롬프트를
+        확인한 뒤에만 넣는다.
+        """
         recipient_id = self.recipient_key(recipient_id)
+        self.connection.execute(
+            """
+            UPDATE wake_attempts SET status = 'superseded',
+              processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            WHERE recipient_id = ? AND status = 'sent'
+              AND sent_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)
+            """,
+            (recipient_id, f"-{WAKE_CONFIRM_TTL_SECONDS} seconds"),
+        )
+        self.connection.commit()
         row = self.connection.execute(
             """
             SELECT * FROM wake_attempts

@@ -273,3 +273,30 @@ def test_reusing_a_terminal_window_supersedes_the_old_binding(tmp_path):
     assert {row["surface_id"] for row in live} == {old.surface_id}
     assert registry.binding("agent-old") is None
     registry.close()
+
+
+def test_unconfirmed_wake_does_not_deafen_forever(tmp_path, monkeypatch):
+    """확인이 유실되면 게이트가 이후 모든 깨우기를 영구히 거부한다.
+
+    그러면 그 에이전트는 다시는 안 깨어난다 — 메시지는 쌓이는데 아무도 모른다.
+    8/18 실사용에서 그대로 걸렸다: 8/17 21:28에 보낸 것이 하루 넘게 남아
+    메시지 5건을 막고 있었다. 다시 깨우는 쪽은 안전하다 — 호출문 한 줄이고
+    게이트가 빈 프롬프트를 확인한 뒤에만 넣는다.
+    """
+    from dispatch_node import registry as registry_module
+
+    registry = LocalRegistry(tmp_path / "node.db")
+    current = candidate("idle")
+    registry.attach("agent-1", current)
+    record_pending(registry)
+
+    cmux = GateCmux(current)
+    gate = IdleGate(registry, cmux, settle_seconds=0)
+    assert gate.run("agent-1", send=True).eligible is True
+    assert gate.run("agent-1", send=True).reason == "wake_unconfirmed"
+
+    # 확인이 끝내 오지 않아도 한도가 지나면 다시 깨울 수 있어야 한다.
+    monkeypatch.setattr(registry_module, "WAKE_CONFIRM_TTL_SECONDS", 0)
+    assert gate.run("agent-1", send=True).eligible is True
+    assert len(cmux.wakes) == 2
+    registry.close()
