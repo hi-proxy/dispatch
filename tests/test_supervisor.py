@@ -1,9 +1,9 @@
 import threading
 
-from dispatch_node.cmux import CmuxAgentCandidate
-from dispatch_node.registry import LocalRegistry
-from dispatch_node.supervisor import NodeSupervisor
-from dispatch_node.inbox import InboxWatcher
+from fungis_node.cmux import CmuxAgentCandidate
+from fungis_node.registry import LocalRegistry
+from fungis_node.supervisor import NodeSupervisor
+from fungis_node.inbox import InboxWatcher
 
 
 def candidate():
@@ -115,7 +115,7 @@ def test_supervisor_wake_contains_only_short_stable_command(tmp_path):
     )
     supervisor._run_gate(registry, "agent-1")
     assert cmux.wakes == [
-        ("surface-1", "[dispatch] inbox — run: dispatch inbox")
+        ("surface-1", "[fungis] inbox — run: fungis inbox")
     ]
     registry.close()
 
@@ -149,7 +149,7 @@ def test_supervisor_recovers_claim_when_reading_turn_ended_while_down(
 
     monkeypatch.setattr(InboxWatcher, "ack_processed", fake_ack)
     cmux = WakeCmux(current)
-    NodeSupervisor(path, "http://dispatch.test", cmux)._run_gate(registry, "agent-1")
+    NodeSupervisor(path, "http://fungis.test", cmux)._run_gate(registry, "agent-1")
     assert calls == [1]
     assert registry.claim("agent-1") is None
     assert registry.outstanding_wake("agent-1") is None
@@ -162,7 +162,7 @@ def test_daemon_starts_with_no_connected_agents(tmp_path, monkeypatch):
     여기서 막으면 처음 켜는 사람은 daemon도 못 띄우고 에이전트도 못 붙인다.
     앱은 stderr를 버려서 화면에는 이유 없는 실패만 남는다.
     """
-    from dispatch_node import demo
+    from fungis_node import demo
 
     served = threading.Event()
     monkeypatch.setattr(demo.DaemonLauncher, "_start_server", lambda self: None)

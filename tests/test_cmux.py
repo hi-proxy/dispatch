@@ -2,9 +2,9 @@ import json
 import sqlite3
 import subprocess
 
-from dispatch_node.cmux import CmuxAdapter, CmuxAgentCandidate
-from dispatch_node.registry import LocalRegistry
-from dispatch_node.agent_cli import current_binding
+from fungis_node.cmux import CmuxAdapter, CmuxAgentCandidate
+from fungis_node.registry import LocalRegistry
+from fungis_node.agent_cli import current_binding
 
 
 class FakeCmux(CmuxAdapter):

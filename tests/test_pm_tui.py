@@ -1,4 +1,4 @@
-from dispatch_node.pm_tui import PMController
+from fungis_node.pm_tui import PMController
 
 
 class FakePMClient:

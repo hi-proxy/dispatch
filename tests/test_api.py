@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from dispatch_server.app import create_app
+from fungis_server.app import create_app
 
 
 def test_message_flow(tmp_path):
@@ -532,7 +532,7 @@ def test_role_address_queues_until_assignment_and_preserves_history(tmp_path):
         ).json()
         assert [item["body"] for item in delivered][0] == "queued task"
         onboarding = delivered[1]["body"]
-        assert "dispatch init --project local" in onboarding
+        assert "fungis init --project local" in onboarding
         assert onboarding.endswith("You own front1.")
         assert delivered[0]["role_recipients"][0]["name"] == "front1"
 
@@ -658,9 +658,9 @@ def test_project_bootstrap_returns_agent_specific_role_directory(tmp_path):
         assert bootstrap["own_role"]["name"] == "dev-lead"
         assert bootstrap["roles"][0]["self"] is True
         assert bootstrap["roles"][1]["assigned"] is False
-        assert bootstrap["usage"]["reply_pm"] == 'dispatch reply "..."'
-        assert bootstrap["usage"]["history"] == "dispatch history 20"
-        assert "dispatch history 20" in bootstrap["usage"]["recovery"]
+        assert bootstrap["usage"]["reply_pm"] == 'fungis reply "..."'
+        assert bootstrap["usage"]["history"] == "fungis history 20"
+        assert "fungis history 20" in bootstrap["usage"]["recovery"]
         assert len(bootstrap["revision"]) == 12
 
 
@@ -717,7 +717,7 @@ def test_assignment_always_carries_the_project_id(tmp_path):
 
     안 보내면 에이전트는 자기가 배정된 줄도 모르고, PM은 앱에서 보냈다고
     믿는다. 프로젝트 ID가 없으면 배정된 건 알아도 자기 방 번호를 몰라
-    dispatch init을 못 하고 PM에게 되묻는다. 8/16 실측에서 그대로 겪었다.
+    fungis init을 못 하고 PM에게 되묻는다. 8/16 실측에서 그대로 겪었다.
     """
     app = create_app(tmp_path / "api.db")
     with TestClient(app) as client:
@@ -739,7 +739,7 @@ def test_assignment_always_carries_the_project_id(tmp_path):
             "/v1/messages", params={"recipient": "agent-a", "after": 0}
         ).json()
         assert len(delivered) == 1
-        assert "dispatch init --project local" in delivered[0]["body"]
+        assert "fungis init --project local" in delivered[0]["body"]
 
 
 def test_new_session_in_the_same_terminal_replaces_the_old_binding(tmp_path):

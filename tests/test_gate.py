@@ -1,8 +1,8 @@
 import sqlite3
 
-from dispatch_node.cmux import CmuxAdapter, CmuxAgentCandidate
-from dispatch_node.gate import IdleGate
-from dispatch_node.registry import LocalRegistry
+from fungis_node.cmux import CmuxAdapter, CmuxAgentCandidate
+from fungis_node.gate import IdleGate
+from fungis_node.registry import LocalRegistry
 
 
 class GateCmux(CmuxAdapter):
@@ -23,7 +23,7 @@ class GateCmux(CmuxAdapter):
             return self.candidate
         return None
 
-    def wake(self, surface_id, text="[dispatch] inbox"):
+    def wake(self, surface_id, text="[fungis] inbox"):
         self.wakes.append((surface_id, text))
 
     def prompt_ready(self, surface_id):
@@ -87,7 +87,7 @@ def test_needs_input_wakes_only_at_bare_prompt(tmp_path):
         "agent-1", send=True
     )
     assert decision.eligible is True
-    assert ready.wakes == [("surface-uuid", "[dispatch] inbox")]
+    assert ready.wakes == [("surface-uuid", "[fungis] inbox")]
 
 
 def test_fresh_session_wakes_at_bare_prompt(tmp_path):
@@ -114,7 +114,7 @@ def test_fresh_session_wakes_at_bare_prompt(tmp_path):
             "agent-1", send=True
         )
         assert decision.eligible is True
-        assert ready.wakes == [("surface-uuid", "[dispatch] inbox")]
+        assert ready.wakes == [("surface-uuid", "[fungis] inbox")]
         registry.close()
 
 
@@ -140,7 +140,7 @@ def test_idle_collapses_pending_and_sends_once(tmp_path):
     assert first.pending_count == 2
     assert first.through_seq == 5
     assert second.reason == "wake_unconfirmed"
-    assert cmux.wakes == [("surface-uuid", "[dispatch] inbox")]
+    assert cmux.wakes == [("surface-uuid", "[fungis] inbox")]
 
 
 def test_dry_run_never_records_or_sends(tmp_path):
@@ -283,7 +283,7 @@ def test_unconfirmed_wake_does_not_deafen_forever(tmp_path, monkeypatch):
     메시지 5건을 막고 있었다. 다시 깨우는 쪽은 안전하다 — 호출문 한 줄이고
     게이트가 빈 프롬프트를 확인한 뒤에만 넣는다.
     """
-    from dispatch_node import registry as registry_module
+    from fungis_node import registry as registry_module
 
     registry = LocalRegistry(tmp_path / "node.db")
     current = candidate("idle")

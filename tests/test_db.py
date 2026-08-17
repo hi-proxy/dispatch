@@ -1,8 +1,8 @@
-from dispatch_server.db import DispatchDB
+from fungis_server.db import FungisDB
 
 
 def setup_db(tmp_path):
-    db = DispatchDB(tmp_path / "dispatch.db")
+    db = FungisDB(tmp_path / "fungis.db")
     pm = db.create_principal(kind="human", display_name="pm")
     agent = db.create_principal(kind="agent", display_name="agent1")
     return db, pm, agent
