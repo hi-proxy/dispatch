@@ -2,7 +2,7 @@ import Foundation
 import SwiftUI
 
 /// 한 방에서 누구에게 말하던 중이었는지.
-struct RecipientSelection {
+struct RecipientSelection: Codable {
     var targets: Set<String> = []
     var roles: Set<String> = []
     var references: Set<String> = []
@@ -15,8 +15,30 @@ final class AppModel: ObservableObject {
     @Published var selectedRoles: Set<String> = []
     /// 듣기만 하는 자리. 수신자로 넣으면 받는 쪽이 지시로 읽고 조사에 들어간다.
     @Published var referenceRoles: Set<String> = []
-    /// 방마다의 수신자 선택. 방을 옮겨도 하던 대화의 상대가 유지된다.
-    private var recipientMemory: [String: RecipientSelection] = [:]
+    /// 방마다의 수신자 선택. 방을 옮겨도, 앱을 껐다 켜도 하던 대화의 상대가
+    /// 유지된다. 연속성이 이 앱의 값이라 앱 생애에만 남기면 반만 지킨다.
+    ///
+    /// 안읽음 커서와 같은 성격이라 같은 자리에 둔다 — PM의 방별 화면 상태다.
+    /// 여러 기기에서 같은 상태를 봐야 하면 둘을 함께 서버로 옮긴다.
+    private var recipientMemory: [String: RecipientSelection] = AppModel.loadRecipients() {
+        didSet { AppModel.saveRecipients(recipientMemory) }
+    }
+
+    private static let recipientKey = "recipientMemory"
+
+    private static func loadRecipients() -> [String: RecipientSelection] {
+        guard let data = UserDefaults.standard.data(forKey: recipientKey),
+              let value = try? JSONDecoder().decode(
+                  [String: RecipientSelection].self, from: data
+              )
+        else { return [:] }
+        return value
+    }
+
+    private static func saveRecipients(_ value: [String: RecipientSelection]) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        UserDefaults.standard.set(data, forKey: recipientKey)
+    }
     @Published var isConnected = false
     @Published var errorMessage: String?
     @Published var isMutating = false
