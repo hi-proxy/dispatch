@@ -9,7 +9,10 @@ struct FungisMacApp: App {
             ContentView()
                 .environmentObject(model)
                 .frame(minWidth: 920, minHeight: 620)
-                .task { await model.run() }
+                .task {
+                    NotificationCoordinator.shared.start()
+                    await model.run()
+                }
         }
         .defaultSize(width: 1180, height: 760)
         .commands {

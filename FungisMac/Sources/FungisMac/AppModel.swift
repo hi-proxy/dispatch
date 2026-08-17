@@ -66,9 +66,8 @@ final class AppModel: ObservableObject {
     @Published private var readSeq: [String: Int] =
         UserDefaults.standard.dictionary(forKey: "readSeq") as? [String: Int] ?? [:]
 
-    init() {
-        NotificationCoordinator.shared.start()
-    }
+    // 알림 준비는 앱 생애의 일이지 모델의 일이 아니다. init에 두면 앱 번들
+    // 밖(테스트)에서 알림 센터를 건드려 프로세스가 죽는다.
 
     func run() async {
         while !Task.isCancelled {
@@ -426,6 +425,10 @@ final class AppModel: ObservableObject {
             return false
         }
     }
+
+    /// 테스트가 화면 없이 갱신 경로를 밟게 한다. 수신자 유지가 세 번 어긋난
+    /// 자리라 논리만 따로 붙잡을 수 있어야 한다.
+    func applyForTesting(_ freshSnapshot: FungisSnapshot) { apply(freshSnapshot) }
 
     private func apply(_ freshSnapshot: FungisSnapshot) {
         var fresh = freshSnapshot
