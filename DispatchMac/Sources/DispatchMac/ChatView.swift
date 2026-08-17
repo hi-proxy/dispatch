@@ -580,20 +580,28 @@ private struct ChatComposer: View {
                         HStack(spacing: 5) {
                             RoleAvatar(role: role, size: 22)
                             Text(role.name).font(.caption.bold()).lineLimit(1)
+                            Circle()
+                                .fill(role.assigned && role.sessionConnected ? .green : .orange)
+                                .frame(width: 7, height: 7)
                             if isReference {
-                                Text("CC").font(.system(size: 9, weight: .heavy))
-                                    .foregroundStyle(.blue)
-                            } else {
-                                Circle()
-                                    .fill(role.assigned && role.sessionConnected ? .green : .orange)
-                                    .frame(width: 7, height: 7)
+                                Text("CC")
+                                    .font(.system(size: 9, weight: .heavy))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4).padding(.vertical, 1)
+                                    .background(Color.blue, in: Capsule())
                             }
                         }
                         .padding(.horizontal, 8).padding(.vertical, 6)
                     }
                     .buttonStyle(.plain)
-                    .background(
-                        chipTint(role), in: Capsule()
+                    .background(chipTint(role), in: Capsule())
+                    // 세 자리가 눈에 바로 갈리게 한다. 채워짐=수신,
+                    // 테두리만=참조, 아무것도 없음=해제. 옅은 색 차이만으로는
+                    // 참조와 해제가 구분되지 않았다.
+                    .overlay(
+                        Capsule().stroke(
+                            isReference ? Color.blue : .clear, lineWidth: 1.5
+                        )
                     )
                     .help(
                         isReference
@@ -651,8 +659,10 @@ private struct ChatComposer: View {
     }
 
     private func chipTint(_ role: WorkspaceRole) -> Color {
-        if model.selectedRoles.contains(role.id) { return .accentColor.opacity(0.16) }
-        if model.referenceRoles.contains(role.id) { return .blue.opacity(0.10) }
+        if model.selectedRoles.contains(role.id) { return .accentColor.opacity(0.22) }
+        // 참조는 채우지 않는다. 채우면 수신과 헷갈리고, 옅게 채우면 해제와
+        // 헷갈린다. 테두리로만 말한다.
+        if model.referenceRoles.contains(role.id) { return .clear }
         return .secondary.opacity(0.07)
     }
 
