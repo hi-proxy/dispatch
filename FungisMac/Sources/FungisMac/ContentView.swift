@@ -27,6 +27,7 @@ struct ContentView: View {
                                 unread: model.hasUnread(project)
                             )
                         }
+                        // hit-area: ProjectRow가 자기 안에서 도형을 준다
                         .buttonStyle(.plain)
                         .contextMenu { projectMenu(project) }
                     }
@@ -115,6 +116,8 @@ struct ContentView: View {
             if !search.isEmpty {
                 Button { search = "" } label: {
                     Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
                 }.buttonStyle(.plain)
             }
         }

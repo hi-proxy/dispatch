@@ -592,6 +592,9 @@ private struct ChatComposer: View {
                             }
                         }
                         .padding(.horizontal, 8).padding(.vertical, 6)
+                        // 캡슐 전체가 눌려야 한다. 안 주면 그려진 글자와
+                        // 아바타만 눌리고 여백은 통과한다.
+                        .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                     .background(chipTint(role), in: Capsule())
@@ -872,6 +875,7 @@ private struct TimelinePinGap: View {
                         .font(.caption2.bold())
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(.regularMaterial, in: Capsule())
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -1003,6 +1007,7 @@ private struct TimelineSideRail: View {
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .contextMenu {
@@ -1092,6 +1097,8 @@ private struct MessageRow: View {
                 HStack(spacing: 7) {
                     Button(action: bookmark) {
                         Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(isBookmarked ? .orange : .secondary)
@@ -1103,6 +1110,8 @@ private struct MessageRow: View {
                             showPretty ? "원문 보기" : "Pretty 보기",
                             systemImage: showPretty ? "doc.plaintext" : "text.alignleft"
                         )
+                        .padding(.vertical, 3).padding(.horizontal, 2)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.blue)
@@ -1244,6 +1253,7 @@ private struct ContextFilterChip: View {
                 .font(.caption.bold()).lineLimit(1).truncationMode(.middle)
                 .frame(maxWidth: 260)
                 .padding(.horizontal, 8).padding(.vertical, 5)
+                .contentShape(Capsule())
         }
             .buttonStyle(.plain)
             .foregroundStyle(selected ? .white : color)
@@ -1327,11 +1337,15 @@ private struct ContextTrayControl: View {
 
     var body: some View {
         Button(action: action) {
-            if let systemImage {
-                Label(label, systemImage: systemImage)
-            } else {
-                Text(label)
+            Group {
+                if let systemImage {
+                    Label(label, systemImage: systemImage)
+                } else {
+                    Text(label)
+                }
             }
+            .padding(.vertical, 4).padding(.horizontal, 3)
+            .contentShape(Rectangle())
         }
         .font(.caption.bold())
         .buttonStyle(.plain)
@@ -1347,9 +1361,14 @@ private struct ContextButton: View {
     let icon: String
     let action: () -> Void
     var body: some View {
-        Button(action: action) { Label(label, systemImage: icon).font(.caption2.bold()) }
+        // 여백을 버튼 바깥에 두면 캡슐은 커 보여도 글자만 눌린다. 안으로
+        // 넣고 도형을 준다.
+        Button(action: action) {
+            Label(label, systemImage: icon).font(.caption2.bold())
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .contentShape(Capsule())
+        }
             .buttonStyle(.plain).foregroundStyle(color)
-            .padding(.horizontal, 6).padding(.vertical, 3)
             .background(color.opacity(0.1), in: Capsule())
     }
 }
@@ -1363,9 +1382,10 @@ private struct DetectedContextButton: View {
                 Image(systemName: context.verified ? "checkmark.seal" : "sparkle.magnifyingglass")
                 Text("\(context.kind):\(context.value)")
             }.font(.caption2)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .contentShape(Capsule())
         }.buttonStyle(.plain)
             .foregroundStyle(context.verified ? Color.green : Color.secondary)
-            .padding(.horizontal, 6).padding(.vertical, 3)
             .overlay(Capsule().stroke(style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
             .help(context.verified ? "Detected and verified from Git" : "Detected candidate; message metadata was not changed")
     }
