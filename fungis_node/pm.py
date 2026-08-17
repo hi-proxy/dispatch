@@ -177,6 +177,13 @@ class PMClient:
         assert isinstance(result, dict)
         return result
 
+    def archive_project(self, project_id: str) -> dict:
+        result = self._request(
+            "DELETE", f"/v1/projects/{urllib.parse.quote(project_id)}"
+        )
+        assert isinstance(result, dict)
+        return result
+
     def update_project(self, project_id: str, name: str) -> dict:
         result = self._request(
             "PATCH", f"/v1/projects/{urllib.parse.quote(project_id)}", {"name": name}

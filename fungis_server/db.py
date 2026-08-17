@@ -504,6 +504,43 @@ class FungisDB:
             row = conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         return dict(row)
 
+    def archive_project(self, *, project_id: str) -> dict[str, Any]:
+        """방을 목록에서 치운다. 메시지는 지우지 않는다.
+
+        하드 삭제하지 않는 이유는 대화가 기록이기 때문이다. 방을 닫는 것과
+        오간 말을 없애는 것은 다른 일이고, 뒤쪽은 되돌릴 수 없다.
+
+        배정이 남아 있으면 함께 끝낸다. 안 그러면 에이전트가 갈 곳 없는 역할을
+        쥔 채로 남는다 — 치우려던 것이 다른 모양으로 남는 셈이다.
+        """
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE id = ? AND archived_at IS NULL",
+                (project_id,),
+            ).fetchone()
+            if row is None:
+                raise LookupError("project not found")
+            ended = conn.execute(
+                """UPDATE role_assignments
+                   SET ended_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                   WHERE ended_at IS NULL AND role_id IN (
+                     SELECT id FROM workspace_roles WHERE workspace_id = ?
+                   )""",
+                (project_id,),
+            ).rowcount
+            conn.execute(
+                """UPDATE projects
+                   SET archived_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                   WHERE id = ?""",
+                (project_id,),
+            )
+            archived = conn.execute(
+                "SELECT * FROM projects WHERE id = ?", (project_id,)
+            ).fetchone()
+        result = dict(archived)
+        result["ended_assignments"] = ended
+        return result
+
     def ensure_project(self, project_id: str) -> None:
         with self._lock:
             row = self._connection.execute(

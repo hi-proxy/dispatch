@@ -115,6 +115,15 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         except Exception as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
+    @app.delete("/v1/projects/{project_id}")
+    def archive_project(project_id: str) -> dict:
+        try:
+            return db.archive_project(project_id=project_id)
+        except LookupError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except Exception as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @app.get("/v1/pm-profiles/{principal_id}")
     def pm_profile(principal_id: str) -> dict:
         try:

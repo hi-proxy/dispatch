@@ -485,6 +485,14 @@ def create_web_app(
         except Exception as error:
             raise fail(error) from error
 
+    @app.delete("/api/projects/{project_id}")
+    def archive_project(project_id: str) -> dict:
+        try:
+            with client() as pm:
+                return pm.archive_project(project_id)
+        except Exception as error:
+            raise fail(error) from error
+
     @app.put("/api/projects/{project_id}/repository")
     def set_project_repository(project_id: str, payload: RepositoryPayload) -> dict:
         try:

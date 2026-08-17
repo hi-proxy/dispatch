@@ -1,6 +1,13 @@
 import Foundation
 import SwiftUI
 
+/// 한 방에서 누구에게 말하던 중이었는지.
+struct RecipientSelection {
+    var targets: Set<String> = []
+    var roles: Set<String> = []
+    var references: Set<String> = []
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     @Published var snapshot = FungisSnapshot.empty
@@ -8,6 +15,8 @@ final class AppModel: ObservableObject {
     @Published var selectedRoles: Set<String> = []
     /// 듣기만 하는 자리. 수신자로 넣으면 받는 쪽이 지시로 읽고 조사에 들어간다.
     @Published var referenceRoles: Set<String> = []
+    /// 방마다의 수신자 선택. 방을 옮겨도 하던 대화의 상대가 유지된다.
+    private var recipientMemory: [String: RecipientSelection] = [:]
     @Published var isConnected = false
     @Published var errorMessage: String?
     @Published var isMutating = false
@@ -228,8 +237,22 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// 방을 목록에서 치운다. 메시지는 서버에 남는다 — 방을 닫는 것과 오간 말을
+    /// 없애는 것은 다른 일이다. 지금 보던 방이면 다른 방으로 옮겨 준다.
+    func archiveProject(_ id: String) async {
+        guard await mutate({ try await api.archiveProject(id: id) }) else { return }
+        recipientMemory[id] = nil
+        timelineCache[id] = nil
+        if selectedProjectID == id,
+           let next = snapshot.projects.first(where: { $0.id != id })?.id {
+            selectProject(next)
+        }
+        await refresh()
+    }
+
     func selectProject(_ id: String) {
         guard id != selectedProjectID else { return }
+        let previous = selectedProjectID
         timelineCache[selectedProjectID] = (Array(snapshot.timeline.suffix(10)), hasOlderMessages)
         selectedProjectID = id
         if let cached = timelineCache[id] {
@@ -248,9 +271,15 @@ final class AppModel: ObservableObject {
             prefetchedProjectID = nil
             isLoadingTimeline = true
         }
-        selectedTargets.removeAll()
-        selectedRoles.removeAll()
-        referenceRoles.removeAll()
+        // 수신자 선택은 방마다 기억한다. 방을 옮겼다 돌아왔을 때 누구에게
+        // 말하던 중이었는지 다시 고르게 하면, 옮길 때마다 그 일을 반복한다.
+        recipientMemory[previous] = RecipientSelection(
+            targets: selectedTargets, roles: selectedRoles, references: referenceRoles
+        )
+        let remembered = recipientMemory[id] ?? RecipientSelection()
+        selectedTargets = remembered.targets
+        selectedRoles = remembered.roles
+        referenceRoles = remembered.references
         // 옛 프로젝트 스트림은 서버가 다음 snapshot을 보낼 때까지 스스로 끝나지
         // 않는다. 끊어야 run 루프가 새 프로젝트로 곧바로 다시 붙는다.
         switchingProject = true

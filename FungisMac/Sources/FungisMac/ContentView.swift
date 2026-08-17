@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var projectName = ""
     @State private var repositoryProject: FungisProject?
     @State private var choosingRepository = false
+    @State private var archivingProject: FungisProject?
 
     var body: some View {
         NavigationSplitView {
@@ -55,6 +56,26 @@ struct ContentView: View {
                             .padding()
                     }
                 }
+        }
+        .confirmationDialog(
+            "\(archivingProject?.name ?? "") 방을 닫습니다",
+            isPresented: .init(
+                get: { archivingProject != nil },
+                set: { if !$0 { archivingProject = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("닫기", role: .destructive) {
+                if let project = archivingProject {
+                    Task { await model.archiveProject(project.id) }
+                }
+                archivingProject = nil
+            }
+            Button("취소", role: .cancel) { archivingProject = nil }
+        } message: {
+            // 되돌릴 수 없어 보이면 안 누르고, 다 지워진다고 오해해도 안 된다.
+            // 무엇이 사라지고 무엇이 남는지 그대로 적는다.
+            Text("목록에서 사라지고 배정된 역할이 해제됩니다. 주고받은 메시지는 서버에 남습니다.")
         }
         .sheet(isPresented: $showAgents) {
             AgentsView().frame(minWidth: 780, minHeight: 470)
@@ -176,6 +197,8 @@ struct ContentView: View {
                 Task { _ = await model.deleteProjectRepository(projectID: project.id) }
             }
         }
+        Divider()
+        Button("방 닫기…", role: .destructive) { archivingProject = project }
     }
 
     private func projectEditor(title: String, save: @escaping () async -> Void) -> some View {

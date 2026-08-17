@@ -239,6 +239,12 @@ struct FungisAPI: Sendable {
         )
     }
 
+    func archiveProject(id: String) async throws {
+        let _: EmptyResponse = try await request(
+            "api/projects/\(encoded(id))", method: "DELETE", acceptsAnyObject: true
+        )
+    }
+
     func setProjectRepository(projectID: String, path: String) async throws {
         struct Payload: Encodable { let path: String }
         let _: EmptyResponse = try await request(

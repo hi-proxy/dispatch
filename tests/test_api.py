@@ -769,3 +769,45 @@ def test_new_session_in_the_same_terminal_replaces_the_old_binding(tmp_path):
         assert bind("agent-old", "session-1").status_code in (200, 201)
         # 같은 창, 새 세션. 예전에는 여기서 UNIQUE 위반으로 409가 났다.
         assert bind("agent-new", "session-2").status_code in (200, 201)
+
+
+def test_archiving_a_project_keeps_messages_and_ends_assignments(tmp_path):
+    """방을 닫는 것과 오간 말을 없애는 것은 다른 일이다.
+
+    배정이 남으면 에이전트가 갈 곳 없는 역할을 쥔 채로 남는다 — 치우려던 것이
+    다른 모양으로 남는 셈이다.
+    """
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        for principal_id, kind in (("pm", "human"), ("agent-a", "agent")):
+            client.put(
+                f"/v1/principals/{principal_id}",
+                json={"id": principal_id, "kind": kind, "display_name": principal_id},
+            )
+        project = client.post("/v1/projects", json={"name": "닫을 방"}).json()
+        role = client.post(
+            f"/v1/workspaces/{project['id']}/roles", json={"name": "worker"}
+        ).json()
+        client.put(
+            f"/v1/roles/{role['id']}/assignment",
+            json={"agent_id": "agent-a", "assigned_by": "pm"},
+        )
+        client.post(
+            "/v1/messages",
+            json={
+                "workspace_id": project["id"], "sender_id": "pm",
+                "recipient_ids": ["agent-a"], "body": "남아야 한다",
+            },
+        )
+
+        archived = client.delete(f"/v1/projects/{project['id']}").json()
+        assert archived["archived_at"]
+        assert archived["ended_assignments"] == 1
+
+        # 목록에서 빠진다.
+        assert project["id"] not in [p["id"] for p in client.get("/v1/projects").json()]
+        # 메시지는 남는다.
+        timeline = client.get(f"/v1/workspaces/{project['id']}/timeline").json()
+        assert [item["body"] for item in timeline] == ["남아야 한다"]
+        # 두 번 닫으면 404.
+        assert client.delete(f"/v1/projects/{project['id']}").status_code == 404
