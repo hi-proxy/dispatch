@@ -1191,7 +1191,15 @@ private struct MessageRow: View {
             .filter { !roleAgentIDs.contains($0.recipientID) }
             .map(\.displayName)
         let names = roleNames + directNames
-        return names.isEmpty ? "수신자 없음" : "to: " + names.joined(separator: ", ")
+        let head = names.isEmpty ? "수신자 없음" : "to: " + names.joined(separator: ", ")
+        // 참조도 배달되므로 누가 듣고 있었는지가 기록의 일부다. 안 보여주면
+        // 나중에 "왜 저 사람이 이 얘기를 알지"를 되짚을 수 없다.
+        guard !message.references.isEmpty else { return head }
+        let copied = message.references.map { reference in
+            roles.first { $0.agentID == reference.principalID }
+                .map { "@\($0.name)" } ?? reference.displayName
+        }
+        return head + "  ·  cc: " + copied.joined(separator: ", ")
     }
 
     private func relationLabel(_ relation: String) -> String {
