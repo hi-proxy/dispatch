@@ -147,7 +147,7 @@ class DaemonLauncher(DemoLauncher):
         # 연결하는 길은 그 앱뿐이라, 여기서 막으면 처음 켜는 사람은 영영
         # 아무것도 못 한다. supervisor는 빈 레지스트리를 견디고 새로 붙는
         # 것을 2초마다 알아서 집는다.
-        owned_server = self._start_server()
+        owned = [self._start_server()]
         stop_event = threading.Event()
         supervisor = NodeSupervisor(
             registry_path=self.registry_path,
@@ -162,6 +162,27 @@ class DaemonLauncher(DemoLauncher):
             daemon=True,
         )
         supervisor_thread.start()
+
+        def watch_server() -> None:
+            """서버가 사라지면 다시 띄운다.
+
+            앱이 daemon을 다시 띄울 때, 아직 종료 중인 옛 서버를 살아 있다고
+            보고 자기 서버를 안 띄우는 창이 있다. 그다음 옛 서버가 죽으면
+            아무것도 안 남는다. 8/18에 두 번 겪었고 그때마다 PM이 기다리는
+            중이었다. 무너지면 사람이 실패해봐야 아는 상태를 없앤다.
+            """
+            while not stop_event.wait(5):
+                if _healthy(self.server_url):
+                    continue
+                try:
+                    owned[0] = self._start_server()
+                    print("Dispatch server was gone; restarted.", flush=True)
+                except Exception as error:
+                    print(f"server restart failed: {error}", flush=True)
+
+        threading.Thread(
+            target=watch_server, name="dispatch-server-watch", daemon=True
+        ).start()
         # SIGTERM은 기본 처리에서 finally를 안 돌린다. 그러면 우리가 띄운 서버가
         # 고아로 남고, 다음 daemon은 8787이 살아 있으니 자기 서버를 안 띄운 채
         # 옛 서버를 그대로 쓴다. 재시작했다고 믿는데 옛 코드가 도는 상태가 된다.
@@ -181,10 +202,11 @@ class DaemonLauncher(DemoLauncher):
         finally:
             stop_event.set()
             supervisor_thread.join(timeout=5)
-            if owned_server is not None and owned_server.poll() is None:
-                owned_server.terminate()
+            server = owned[0]
+            if server is not None and server.poll() is None:
+                server.terminate()
                 try:
-                    owned_server.wait(timeout=5)
+                    server.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    owned_server.kill()
-                    owned_server.wait(timeout=3)
+                    server.kill()
+                    server.wait(timeout=3)
