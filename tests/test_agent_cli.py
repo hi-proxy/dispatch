@@ -265,3 +265,31 @@ def test_reference_accepts_the_assignee_principal(monkeypatch):
         reference_ids=["agent-local-claude-abc123"],
     )
     assert captured["reference_ids"] == ["agent-local-claude-abc123"]
+
+
+def test_inbox_warns_when_messages_span_rooms(capsys):
+    """여러 방에서 온 것을 한 번에 읽으면 답장 목적지가 흐려진다.
+
+    기본 목적지를 마지막 것으로 뒤집으면, 다른 방 얘기를 하려던 답장이 방금
+    읽은 방으로 간다. 8/18에 archivia CTO가 두 방에 앉으면서 실제로 그
+    상태가 됐다.
+    """
+    emit_inbox([
+        {"seq": 1, "workspace_id": "room-a", "sender_id": "pm",
+         "sender_name": "PM", "body": "a", "track": None, "tags": []},
+        {"seq": 2, "workspace_id": "room-b", "sender_id": "pm",
+         "sender_name": "PM", "body": "b", "track": None, "tags": []},
+    ])
+    captured = capsys.readouterr()
+    assert "--project" in captured.err
+    assert {m["project"] for m in json.loads(captured.out)["messages"]} == {
+        "room-a", "room-b"
+    }
+
+
+def test_inbox_is_quiet_when_one_room(capsys):
+    emit_inbox([
+        {"seq": 1, "workspace_id": "room-a", "sender_id": "pm",
+         "sender_name": "PM", "body": "a", "track": None, "tags": []},
+    ])
+    assert "--project" not in capsys.readouterr().err

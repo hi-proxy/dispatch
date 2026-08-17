@@ -344,6 +344,17 @@ def emit_inbox(messages: list[dict]) -> None:
                 "do not reply. Correct it only if a fact is wrong.",
                 file=sys.stderr,
             )
+        rooms = {
+            message.get("workspace_id")
+            for message in messages
+            if message.get("workspace_id")
+        }
+        if len(rooms) > 1:
+            print(
+                "여러 방에서 왔다. 답할 때 --project로 방을 지정한다. "
+                "각 메시지의 project 값을 쓰면 된다.",
+                file=sys.stderr,
+            )
         chain = max(int(message.get("agent_chain") or 0) for message in messages)
         if chain >= CHAIN_NOTICE:
             print(
@@ -440,12 +451,18 @@ def main() -> None:
                 config["server"], binding["principal_id"], registry
             ).read_messages(binding["surface_id"])
             emit_inbox(messages)
-            if messages:
-                latest_project = messages[-1].get("workspace_id")
-                if latest_project:
-                    registry.set_state(
-                        f"active_project:{binding['principal_id']}", latest_project
-                    )
+            # 여러 방에서 왔으면 기본 목적지를 건드리지 않는다. 마지막 것으로
+            # 뒤집으면, 다른 방 얘기를 하려던 답장이 방금 읽은 방으로 간다.
+            # 방이 하나뿐일 때만 따라간다.
+            rooms = {
+                message.get("workspace_id")
+                for message in messages
+                if message.get("workspace_id")
+            }
+            if len(rooms) == 1:
+                registry.set_state(
+                    f"active_project:{binding['principal_id']}", rooms.pop()
+                )
         elif args.command == "history":
             if not 1 <= args.count <= 500:
                 raise RuntimeError("history count must be between 1 and 500")
