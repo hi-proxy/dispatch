@@ -23,12 +23,15 @@ class PMClient:
     pm_name: str = "PM"
     node_id: str | None = None
     workspace_id: str = "local"
+    # 읽기 검사에 실어 보낼 사람. 앱은 PM이고 에이전트 CLI는 자기 자신이다.
+    caller_id: str | None = None
     _targets: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.server_url = validate_server_url(self.server_url)
         self.pm_id = self.pm_id or self.registry.pm_principal_id()
         self.node_id = self.node_id or self.registry.node_id()
+        self.caller_id = self.caller_id or self.pm_id
 
     def _request(
         self, method: str, path: str, payload: dict | None = None
@@ -299,6 +302,8 @@ class PMClient:
         recipient_id: str | None,
         body: str,
         *,
+        recipient_ids: list[str] | None = None,
+        absolute_reference_ids: list[str] | None = None,
         kind: str = "message",
         reply_level: str = "r1",
         reference_ids: list[str] | None = None,
@@ -315,17 +320,21 @@ class PMClient:
             {
                 "workspace_id": self.workspace_id,
                 "sender_id": self._recipient_id(sender_id),
-                "recipient_ids": (
-                    [self._recipient_id(recipient_id)] if recipient_id else []
-                ),
+                "recipient_ids": [
+                    self._recipient_id(value)
+                    for value in ([recipient_id] if recipient_id else [])
+                    + list(recipient_ids or [])
+                ],
                 "role_ids": [self._role_id(role_id) for role_id in (role_ids or [])],
                 "body": body,
                 "kind": kind,
                 "reply_level": reply_level,
+                # 절대 id 로 준 참조는 풀지 않는다. 이 방 명부에 없는 사람도
+                # 지목할 수 있어야 하고, HQ 에는 명부 자체가 없다.
                 "reference_ids": [
                     self._reference_id(reference_id)
                     for reference_id in (reference_ids or [])
-                ],
+                ] + list(absolute_reference_ids or []),
                 "in_reply_to": in_reply_to,
                 "in_reply_to_project_seq": in_reply_to_project_seq,
                 "track": track,
@@ -407,6 +416,125 @@ class PMClient:
         self._raw_request(
             "DELETE", f"/v1/roles/{urllib.parse.quote(role_id)}/avatar"
         )
+
+    # ---- HQ와 상황보드 ------------------------------------------------------
+
+    def hq(self) -> dict | None:
+        try:
+            result = self._request("GET", "/v1/hq")
+        except PMServerError as error:
+            # 아직 안 만든 상태가 정상이다. 오류로 올리면 앱이 첫 화면부터
+            # 빨개진다.
+            if "server 404" in str(error):
+                return None
+            raise
+        assert isinstance(result, dict)
+        return result
+
+    def connect_project(self, project_id: str, hq_id: str) -> dict:
+        result = self._request(
+            "PUT",
+            f"/v1/projects/{urllib.parse.quote(project_id)}/board-link",
+            {"hq_id": hq_id},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def disconnect_project(self, project_id: str) -> None:
+        self._request(
+            "DELETE", f"/v1/projects/{urllib.parse.quote(project_id)}/board-link"
+        )
+
+    def set_role_lead(self, role_id: str, is_lead: bool) -> dict:
+        result = self._request(
+            "PUT",
+            f"/v1/roles/{urllib.parse.quote(role_id)}/lead",
+            {"is_lead": is_lead},
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def lead_of(self, project_id: str) -> dict | None:
+        try:
+            result = self._request(
+                "GET", f"/v1/projects/{urllib.parse.quote(project_id)}/lead"
+            )
+        except PMServerError as error:
+            if "server 404" in str(error):
+                return None
+            raise
+        assert isinstance(result, dict)
+        return result
+
+    def board_candidates(self) -> list[dict]:
+        query = urllib.parse.urlencode({"caller": self.caller_id or ""})
+        result = self._request("GET", f"/v1/board/candidates?{query}")
+        assert isinstance(result, list)
+        return result
+
+    def board(self) -> list[dict]:
+        result = self._request("GET", "/v1/board")
+        assert isinstance(result, list)
+        return result
+
+    def create_board_node(
+        self, project_id: str, title: str, status: str = "todo",
+        created_by: str | None = None,
+    ) -> dict:
+        result = self._request(
+            "POST", "/v1/board/nodes",
+            {
+                "project_id": project_id, "title": title, "status": status,
+                "created_by": created_by or self.caller_id,
+            },
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def update_board_node(
+        self, node_id: str, title: str | None = None, status: str | None = None,
+        actor: str | None = None,
+    ) -> dict:
+        payload: dict[str, Any] = {"actor": actor or self.caller_id}
+        if title is not None:
+            payload["title"] = title
+        if status is not None:
+            payload["status"] = status
+        result = self._request(
+            "PATCH", f"/v1/board/nodes/{urllib.parse.quote(node_id)}", payload
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def delete_board_node(self, node_id: str, actor: str | None = None) -> None:
+        query = urllib.parse.urlencode({"actor": actor or self.caller_id or ""})
+        self._request(
+            "DELETE", f"/v1/board/nodes/{urllib.parse.quote(node_id)}?{query}"
+        )
+
+    def link_board_nodes(
+        self, node_id: str, waits_for: str, created_by: str | None = None
+    ) -> dict:
+        result = self._request(
+            "POST", "/v1/board/edges",
+            {
+                "node_id": node_id, "waits_for": waits_for,
+                "created_by": created_by or self.caller_id,
+            },
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def unlink_board_nodes(
+        self, node_id: str, waits_for: str, actor: str | None = None
+    ) -> None:
+        query = urllib.parse.urlencode(
+            {
+                "node_id": node_id, "waits_for": waits_for,
+                "actor": actor or self.caller_id or "",
+            }
+        )
+        self._request("DELETE", f"/v1/board/edges?{query}")
 
     def shared(self, keys: list[str] | None = None) -> list[dict]:
         query = urllib.parse.urlencode({"keys": keys or []}, doseq=True)
@@ -560,7 +688,7 @@ class PMClient:
         self, limit: int = 100, after: int | None = None,
         before: int | None = None, after_project_seq: int | None = None,
     ) -> list[dict]:
-        query = {"limit": limit}
+        query: dict[str, Any] = {"limit": limit, "caller": self.caller_id or ""}
         if after is not None:
             query["after"] = after
         if before is not None:
@@ -573,6 +701,27 @@ class PMClient:
             f"{urllib.parse.urlencode(query)}",
         )
         assert isinstance(result, list)
+        return result
+
+    def message(self, project_seq: int) -> dict:
+        """방 안의 표시 번호로 글 하나. 번호를 알 때 앞뒤를 다 받지 않는다."""
+        query = urllib.parse.urlencode({"caller": self.caller_id or ""})
+        result = self._request(
+            "GET",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/messages/"
+            f"{int(project_seq)}?{query}",
+        )
+        assert isinstance(result, dict)
+        return result
+
+    def members(self, workspace_id: str | None = None) -> dict:
+        """방 하나의 역할·담당자·lead."""
+        room = workspace_id or self.workspace_id
+        query = urllib.parse.urlencode({"caller": self.caller_id or ""})
+        result = self._request(
+            "GET", f"/v1/workspaces/{urllib.parse.quote(room)}/members?{query}"
+        )
+        assert isinstance(result, dict)
         return result
 
 

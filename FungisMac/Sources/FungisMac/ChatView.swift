@@ -14,6 +14,7 @@ struct ChatView: View {
     @State private var inspectorTab: InspectorTab = .pins
     @State private var scrollProxy: ScrollViewProxy?
     @State private var answering: AttentionRequest?
+    @State private var showingBoard = false
     @State private var bookmarking: ChatMessage?
     @State private var pinningAfter: ChatMessage?
     @State private var contextFilter: String?
@@ -22,6 +23,13 @@ struct ChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+
+            // 상황판은 타임라인 맨 위에 붙는다. 어느 방에 있든 전체가 보인다.
+            // 비어 있어도 띄운다. 안 띄우면 처음 붙일 자리가 없다.
+            BoardStrip(
+                tracks: model.board.tracks,
+                currentProjectID: model.selectedProjectID
+            ) { showingBoard = true }
 
             if !model.snapshot.attention.isEmpty {
                 ScrollView(.horizontal) {
@@ -35,15 +43,11 @@ struct ChatView: View {
                 }.scrollIndicators(.hidden)
             }
 
-            if !contexts.isEmpty {
-                ContextTagTray(contexts: contexts, selected: contextFilter) { context in
-                    contextFilter = contextFilter == context ? nil : context
-                }
-                .id(model.selectedProjectID)
-                .padding(.horizontal, 20)
-                .padding(.top, model.snapshot.attention.isEmpty ? 12 : 0)
-                .padding(.bottom, 10)
-            }
+            // 상단 태그칩 트레이는 미노출. 안 쓰는 기능이 타임라인 위 한 줄을
+            // 계속 차지했다. 메시지에 붙는 태그 표시는 그대로 둔다 — 거기서는
+            // 무슨 얘기인지 알려주는 값을 한다.
+            // ContextTagTray는 지우지 않는다. 필터 자체가 없어진 것은 아니고
+            // 어디에 둘지가 아직 안 정해졌다.
 
             ScrollViewReader { proxy in
                 GeometryReader { timelineGeometry in
@@ -52,7 +56,7 @@ struct ChatView: View {
                             LazyVStack(spacing: 8) {
                                 Color.clear.frame(height: 1).id("chat-bottom")
                                 if filteredTimeline.isEmpty, !model.isLoadingTimeline {
-                                    emptyRoomGuide
+                                    Group { isHQ ? AnyView(emptyHQGuide) : AnyView(emptyRoomGuide) }
                                         // 뒤집힌 스택 안이라 한쪽 패딩은 방향이
                                         // 함께 반전된다. 대칭으로 둬서 무관하게 만든다.
                                         .padding(.vertical, 60)
@@ -183,6 +187,9 @@ struct ChatView: View {
         .inspector(isPresented: $showInspector) {
             inspectorPanel.inspectorColumnWidth(min: 260, ideal: 320, max: 480)
         }
+        .sheet(isPresented: $showingBoard) {
+            BoardSheet().environmentObject(model)
+        }
         .sheet(item: $answering) { request in
             AttentionAnswerSheet(request: request)
         }
@@ -197,6 +204,30 @@ struct ChatView: View {
     /// 방을 새로 만들면 무엇부터 해야 하는지가 화면에 없다. 남은 단계만
     /// 보여주고 끝나면 사라진다. 온보딩은 방마다 한 번이라 상시 UI를 바꾸는
     /// 대신 빈 상태에만 둔다.
+    private var isHQ: Bool {
+        model.snapshot.projects.first { $0.id == model.selectedProjectID }?.isHQ == true
+    }
+
+    /// HQ에는 역할이 없다. 프로젝트용 3단계를 그대로 띄우면 영원히 준비가 안 된
+    /// 방으로 보인다. 여기서 할 일은 방을 부르는 것이지 역할을 만드는 것이 아니다.
+    private var emptyHQGuide: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "point.3.connected.trianglepath.dotted")
+                .font(.system(size: 34)).foregroundStyle(.tertiary)
+            Text("여기서 여러 방을 함께 본다").font(.title3.bold())
+            Text("소집한 방의 lead만 이 타임라인을 읽는다. 각 방의 진행은 위 상황판에 쌓인다.")
+                .font(.callout).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("소집 열기", systemImage: "person.2.badge.plus") {
+                inspectorTab = .roles
+                showInspector = true
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: 380)
+        .frame(maxWidth: .infinity)
+    }
+
     private var emptyRoomGuide: some View {
         VStack(spacing: 14) {
             Image(systemName: "bubble.left.and.bubble.right")
@@ -409,6 +440,12 @@ struct ChatView: View {
 }
 
 private struct ChatComposer: View {
+    /// HQ에는 고를 역할이 없다. 거기 글은 소집된 lead 전원이 받으므로
+    /// 지정하지 않는 것이 곧 전원이다.
+    private var isHQ: Bool {
+        model.snapshot.projects.first { $0.id == model.selectedProjectID }?.isHQ == true
+    }
+
     @EnvironmentObject private var model: AppModel
     let tracks: [String]
     let gitBranches: [String]
@@ -476,7 +513,8 @@ private struct ChatComposer: View {
                 .disabled(
                     blockedBy != nil
                         || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        || (!startsWithMention
+                        || (!isHQ
+                            && !startsWithMention
                             && model.selectedTargets.isEmpty
                             && model.selectedRoles.isEmpty)
                 )
@@ -1084,6 +1122,10 @@ private struct MessageRow: View {
                     }
                 }
                     .font(.body).lineSpacing(3).textSelection(.enabled)
+                    // 원문과 Pretty는 줄 수가 다르다. 뒤집힌 LazyVStack 안에서는
+                    // 바뀐 높이가 다시 제안되지 않아 아래가 잘린다. Text가 자기
+                    // 높이를 그대로 말하게 둔다.
+                    .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(isMine ? Color.white : Color.primary)
                     .padding(.horizontal, 14).padding(.vertical, 11)
                     .background(bubbleColor, in: RoundedRectangle(cornerRadius: 16))

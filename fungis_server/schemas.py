@@ -1,6 +1,12 @@
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AfterValidator, BaseModel, Field
+
+
+
+def one_line(value: str) -> str:
+    """줄바꿈을 공백으로 접는다. 보드 티켓 제목은 한 줄짜리 이름표다."""
+    return " ".join(value.split())
 
 
 class PrincipalCreate(BaseModel):
@@ -53,12 +59,6 @@ class MessageCreate(BaseModel):
     track: str | None = Field(default=None, max_length=120)
     tags: list[str] | None = None
     inherit_context: bool = True
-
-    @model_validator(mode="after")
-    def has_recipient(self):
-        if not self.recipient_ids and not self.role_ids:
-            raise ValueError("at least one recipient or role is required")
-        return self
 
 
 class RoleCreate(BaseModel):
@@ -118,3 +118,35 @@ class PermissionRequestCreate(BaseModel):
 class PermissionResolve(BaseModel):
     status: str = Field(pattern="^(allowed|denied|expired)$")
     resolved_by: str | None = None
+
+
+class BoardLink(BaseModel):
+    hq_id: str = Field(min_length=1)
+
+
+class RoleLead(BaseModel):
+    is_lead: bool
+
+
+class BoardNodeCreate(BaseModel):
+    project_id: str = Field(min_length=1)
+    # 줄바꿈이 티켓 경계다. 제목이 그것을 깨면 프로토콜이 무너진다. escape를
+    # 늘리는 대신 여기서 접는다 — 티켓 제목은 한 줄짜리 이름표다.
+    title: Annotated[str, AfterValidator(one_line)] = Field(min_length=1, max_length=200)
+    created_by: str = Field(min_length=1)
+    status: str = Field(default="todo", pattern="^(todo|active|done)$")
+
+
+class BoardNodeUpdate(BaseModel):
+    title: Annotated[str, AfterValidator(one_line)] | None = Field(
+        default=None, min_length=1, max_length=200
+    )
+    status: str | None = Field(default=None, pattern="^(todo|active|done)$")
+    # 누가 고치는지 필수로 받는다. 선택으로 두면 안 싣는 쪽이 곧 우회로가 된다.
+    actor: str = Field(min_length=1)
+
+
+class BoardEdge(BaseModel):
+    node_id: str = Field(min_length=1)
+    waits_for: str = Field(min_length=1)
+    created_by: str = Field(min_length=1)

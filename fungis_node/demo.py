@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import sys
+import shutil
 import threading
 import time
 import urllib.error
@@ -32,7 +33,8 @@ class DemoLauncher:
     registry_path: Path
     server_db_path: Path
     server_url: str = "http://127.0.0.1:8787"
-    send_wakes: bool = False
+    # 안 보내는 쪽이 말해야 한다. cli.add_wake_flags 참고.
+    send_wakes: bool = True
     pm_name: str = "PM"
 
     def _start_server(self) -> subprocess.Popen | None:
@@ -143,6 +145,14 @@ class DaemonLauncher(DemoLauncher):
     control_port: int = 8790
 
     def run(self) -> None:
+        # cmux가 없으면 뜨자마자 죽는다. 예전에는 그냥 떴다 — health는 200을
+        # 주는데 화면 상태를 만들 때마다 409가 나고 웹소켓이 조용히 끊겼다.
+        # 초록불인데 아무것도 안 되는 상태가 제일 나쁘다. 여기서 막는다.
+        if shutil.which(CmuxAdapter().executable) is None:
+            raise RuntimeError(
+                "cmux를 PATH에서 못 찾았다. 이 daemon은 앱이 띄우는 것이고,"
+                " 손으로 띄우려면 cmux가 PATH에 있어야 한다."
+            )
         # 연결된 에이전트가 없어도 뜬다. 앱이 이 daemon을 띄우고, 에이전트를
         # 연결하는 길은 그 앱뿐이라, 여기서 막으면 처음 켜는 사람은 영영
         # 아무것도 못 한다. supervisor는 빈 레지스트리를 견디고 새로 붙는
@@ -198,6 +208,7 @@ class DaemonLauncher(DemoLauncher):
                 self.server_url,
                 self.control_host,
                 self.control_port,
+                sends_wakes=self.send_wakes,
             )
         finally:
             stop_event.set()
