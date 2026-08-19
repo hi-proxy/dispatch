@@ -16,6 +16,11 @@ struct ChatView: View {
     @State private var answering: AttentionRequest?
     @State private var showingBoard = false
     @State private var bookmarking: ChatMessage?
+    /// 지금 답하는 대상. 에이전트는 `fungis reply 42` 로 참조를 걸어 왔는데
+    /// PM 쪽에는 그 자리가 없어서 사슬이 한쪽에서만 이어졌다.
+    @State private var replyingTo: ChatMessage?
+    /// 지금 열어 둔 코드 자리.
+    @State private var viewingCode: CodeReference?
     @State private var pinningAfter: ChatMessage?
     @State private var contextFilter: String?
     @State private var activeTimelinePinID: String?
@@ -69,7 +74,9 @@ struct ChatView: View {
                                             pmProfile: model.snapshot.pmProfile,
                                             roles: model.snapshot.roles,
                                             leadRooms: leadRooms,
-                                            isBookmarked: bookmarkedSequences.contains(message.seq)
+                                            isBookmarked: bookmarkedSequences.contains(message.seq),
+                                            reply: { replyingTo = message },
+                                            openCode: { viewingCode = $0 }
                                         ) {
                                             contextFilter = contextFilter == $0 ? nil : $0
                                         } bookmark: {
@@ -166,9 +173,13 @@ struct ChatView: View {
             }
             ChatComposer(
                 tracks: tracks, gitBranches: gitBranches,
-                recipientLabel: recipientLabel
+                recipientLabel: recipientLabel,
+                replyingTo: $replyingTo
             )
             .id(model.selectedProjectID)
+            // 방을 옮기면 답할 대상도 두고 간다. 방 번호는 방마다 1부터라
+            // 남겨두면 다른 글을 가리킨다.
+            .onChange(of: model.selectedProjectID) { replyingTo = nil }
         }
         .toolbar {
             ToolbarItem {
@@ -199,6 +210,9 @@ struct ChatView: View {
         }
         .sheet(item: $pinningAfter) { message in
             TimelinePinEditor(after: message)
+        }
+        .sheet(item: $viewingCode) { reference in
+            CodeSheet(reference: reference, projectID: model.selectedProjectID)
         }
     }
 
@@ -461,14 +475,37 @@ private struct ChatComposer: View {
     let tracks: [String]
     let gitBranches: [String]
     let recipientLabel: String
+    /// 답할 대상. 보낸 뒤 여기서 지운다 — 한 번 건 참조가 다음 글까지
+    /// 따라가면 사슬이 엉뚱한 데로 이어진다.
+    @Binding var replyingTo: ChatMessage?
     @State private var draft = ""
     @State private var draftTrack = ""
     @State private var draftTags = ""
     @State private var showMetadata = false
     @State private var mentionError: String?
+    /// 보내는 중. 같은 초안이 두 번 나가는 것을 막는다.
+    @State private var sending = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            if let target = replyingTo {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrowshape.turn.up.left")
+                    Text("#\(target.displaySeq) 에 답하는 중").lineLimit(1)
+                    Text(target.body.prefix(60))
+                        .foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    Button {
+                        replyingTo = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.plain).help("답할 대상 지우기")
+                }
+                .font(.caption)
+                .padding(.horizontal, 9).padding(.vertical, 6)
+                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 7))
+            }
             if showMetadata {
                 HStack(spacing: 8) {
                     Menu {
@@ -732,6 +769,13 @@ private struct ChatComposer: View {
     }
 
     private func send() async {
+        // draft 를 비우는 것이 await 뒤라, 보내는 동안 한 번 더 들어오면 같은
+        // 초안을 다시 읽어 두 번 나간다. Enter 와 버튼이 같은 함수를 부르니
+        // 두 길 다 여기서 막는다. 2026-08-19 에 PM 이 99밀리초 간격으로 같은
+        // 메시지를 두 건 보냈다.
+        guard !sending else { return }
+        sending = true
+        defer { sending = false }
         let rawBody: String
         let targets: [String]
         let roles: [String]
@@ -764,9 +808,11 @@ private struct ChatComposer: View {
         if await model.send(
             body, to: targets, roles: roles,
             references: model.selectedReferenceIDs,
+            inReplyTo: replyingTo?.seq,
             track: track.isEmpty ? nil : track, tags: tags
         ) {
             draft = ""
+            replyingTo = nil
         }
     }
 
@@ -1108,6 +1154,8 @@ private struct MessageRow: View {
     /// 발신자 principal id → 그가 lead 인 방 이름. HQ 타임라인에서만 실질이 있다.
     let leadRooms: [String: String]
     let isBookmarked: Bool
+    let reply: () -> Void
+    let openCode: (CodeReference) -> Void
     let selectContext: (String) -> Void
     let bookmark: () -> Void
     @State private var showPretty = true
@@ -1174,6 +1222,8 @@ private struct MessageRow: View {
                         }
                     }
 
+                CodeReferenceRow(references: codeReferences, open: openCode)
+
                 HStack(spacing: 7) {
                     Button(action: bookmark) {
                         Image(systemName: isBookmarked ? "bookmark.fill" : "bookmark")
@@ -1183,6 +1233,14 @@ private struct MessageRow: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(isBookmarked ? .orange : .secondary)
                     .help("타임라인 북마크 추가")
+                    Button(action: reply) {
+                        Image(systemName: "arrowshape.turn.up.left")
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("이 글에 답하기")
                     Button {
                         showPretty.toggle()
                     } label: {
@@ -1216,6 +1274,12 @@ private struct MessageRow: View {
     }
 
     private var isMine: Bool { message.senderID == pmID }
+
+    /// 본문에서 찾은 코드 자리. 원문을 볼 때만 뽑으면 Pretty 에서 사라지므로
+    /// 표시 방식과 무관하게 둔다.
+    private var codeReferences: [CodeReference] {
+        CodeReference.found(in: message.body)
+    }
 
     @ViewBuilder private var senderAvatar: some View {
         if isMine {
