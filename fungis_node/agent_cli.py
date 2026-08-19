@@ -761,16 +761,31 @@ def addressing(client, args) -> tuple[list[str], list[str], list[str], list[str]
 
     --to는 먼저 이 방의 역할로 읽는다. 역할이 아니면 그대로 수신자 자리에
     넣는다 — HQ에서 방 이름을 주면 서버가 그 방 lead로 푼다.
+
+    state·board·init이 역할을 @이름으로 보여주므로 @를 붙여 치는 것을 받는다.
+    안 받으면 화면에서 읽은 것을 그대로 쳤을 때 수신자 자리로 새고, 서버가
+    그런 id는 없다며 외래키 오류를 뱉는다. 읽은 그대로 칠 수 있어야 한다.
     """
-    known: set[str] = set()
-    if args.to:
+    known: dict[str, str] = {}
+    if args.to or args.cc:
         for role in client.roles():
-            known.add(role["name"])
-            known.add(role["id"])
-    role_ids = [value for value in args.to if value in known]
-    direct = [value for value in args.to if value not in known]
+            known[role["name"]] = role["name"]
+            known[role["id"]] = role["id"]
+
+    def as_role(value: str) -> str | None:
+        return known.get(value) or known.get(value.lstrip("@"))
+
+    role_ids, direct = [], []
+    for value in args.to:
+        name = as_role(value)
+        (role_ids if name else direct).append(name or value)
     direct.extend(args.to_id)
-    return role_ids, direct, list(args.cc), list(args.cc_id)
+    return (
+        role_ids,
+        direct,
+        [as_role(value) or value for value in args.cc],
+        list(args.cc_id),
+    )
 
 
 def default_recipients(client, command: str) -> list[str]:
@@ -945,6 +960,24 @@ def stored_echo(
     }
 
 
+def warn_if_nobody_received(result: dict, role_ids: list[str]) -> None:
+    """아무도 안 받은 것은 성공 출력 안에서 실패처럼 보이지 않는다.
+
+    일반 방의 send 는 지목이 없으면 아무도 받지 않는다. 자리에 붙이는 쓰임이
+    실제로 있어 실패로 만들지는 않는다. 그런데 recipient_ids 가 빈 것을
+    보내는 쪽이 못 알아채서, 한 리드가 사흘 사이 세 번을 갔다고 믿었다.
+    그 자리만 말로 짚는다. HQ 는 서버가 lead 전원으로 풀어 돌려주므로
+    여기 걸리지 않는다.
+    """
+    if result.get("recipient_ids") or role_ids:
+        return
+    print(
+        "아무도 받지 않았다. 방에는 남지만 누구도 깨우지 않는다.  "
+        "받을 사람을 지목하려면 --to ROLE",
+        file=sys.stderr,
+    )
+
+
 def write_error_message(error: Exception) -> str:
     return (
         f"{error}\n"
@@ -1081,6 +1114,7 @@ def main() -> None:
                 tags=args.tag,
                 inherit_context=not args.no_inherit_context,
             )
+            warn_if_nobody_received(result, role_ids)
             print(json.dumps(
                 stored_echo(result, roles=role_ids, in_reply_to=in_reply_to),
                 ensure_ascii=False,

@@ -1,13 +1,211 @@
 # fungis 개발 핸드오프
 
-기준일: 2026-08-18
+기준일: 2026-08-19
 상태: 로컬 실사용 가능한 SwiftUI 개발 빌드
+
+---
+
+# 8/19 재부팅 뒤 안 뜨던 것 — 고쳤다
+
+**벽이 둘이었다.** 앞의 것을 고쳐도 뒤의 것이 남아 있어서 여전히 안 됐다.
+
+| | 벽 | 어디를 고쳤나 |
+|---|---|---|
+| 1 | daemon 이 cmux 실행 파일을 못 찾는다 | fungis 코드 (`2398fc4`) |
+| 2 | 찾아도 cmux 소켓이 daemon 을 거부한다 | **cmux 설정** (저장소 밖) |
+
+---
+
+## 벽 2 — cmux 소켓이 daemon 을 거부한다 (이게 진짜였다)
+
+```
+$ curl http://127.0.0.1:8790/api/state
+{"detail":"Error: ERROR: Access denied - only processes started inside cmux can connect"}
+```
+
+cmux 는 유닉스 소켓으로 조종하고 접근을 모드로 가른다. 공식 스키마 기준:
+
+```
+automation.socketControlMode
+  enum     off · cmuxOnly · automation · password · allowAll ·
+           openAccess · fullOpenAccess · notifications · full
+  default  "cmuxOnly"
+automation.socketPassword   default ""
+```
+
+**기본값 `cmuxOnly` 는 cmux 안에서 시작된 프로세스만 붙게 한다.**
+`fungis-node daemon` 은 `Fungis.app` 이 띄운다 — cmux 자손이 아니라 거부된다.
+에러 문구가 이 모드를 그대로 말한다.
+
+### 고친 방식 — `~/.config/cmux/cmux.json` (fungis 코드 변경 0)
+
+```jsonc
+"automation": {
+  "socketControlMode": "password",
+  "socketPassword": "1234"
+}
+```
+
+cmux CLI 가 `--password` → `CMUX_SOCKET_PASSWORD` → **Settings 에 저장된 값**
+순으로 찾는다. 마지막 폴백 덕분에 daemon 이 아무 환경변수 없이도 붙는다.
+반영은 `cmux reload-config` (앱 재시작 불필요).
+
+**값이 하나 있다**: 이 기계의 다른 로컬 프로세스도 이 파일을 읽으면 cmux 를
+조종할 수 있다. PM 이 알고 고른 것이다. 비밀번호는 임시값이다.
+
+### 여기서 크게 헤맸다 — 검증이 무효였던 이유
+
+벽 1 을 고치고 "정상화 끝났다"고 보고했는데 **틀렸다.** 검증을 내 셸에서 했고
+**내 셸은 cmux 안에 있다.** 그래서 `discover_agents()` 가 에이전트 6개를 찾았다.
+
+`env -i` 로 환경변수는 지웠지만 **프로세스 혈통은 못 지운다.** 앱이 띄운 daemon 은
+`Fungis.app` 자손이라 같은 코드가 거부당했다.
+
+> **cmux 를 건드리는 것은 이 저장소 안에서 검증할 수 없다.**
+> 반드시 도는 daemon 에 물어야 한다 — `curl http://127.0.0.1:8790/api/state`.
+> 여기 `agents` 가 차 있으면 진짜 통과한 것이다.
+
+### 확인한 것
+
+```
+$ curl http://127.0.0.1:8790/api/state
+에이전트 6개 — claude ttys100/026/015/016/102/104
+$ curl http://127.0.0.1:8790/health
+{"status":"ok","sends_wakes":true,"stale":false}
+$ fungis board        20 tickets, 5 waiting
+```
+
+---
+
+## 벽 1 — daemon 이 cmux 실행 파일을 못 찾는다 (`2398fc4`)
+
+### 원인 — 앱이 받는 PATH
+
+cmux 실행 파일은 앱 번들 안에 있다.
+
+```
+/Applications/cmux.app/Contents/Resources/bin/cmux
+```
+
+셸은 프로필이 PATH 에 넣어 줘서 보이지만, Finder 나 로그인 항목으로 뜬 GUI 앱은
+최소 PATH(`/usr/bin:/bin:/usr/sbin:/sbin`)만 물려받는다. **이 daemon 을 띄우는
+것이 그 앱이다.** 재부팅 전에 됐던 것은 그때 앱이 셸에서 떴거나 daemon 이 이미
+살아 있었기 때문이고, 재부팅이 그 우연을 지웠다.
+
+### 고친 방식
+
+`CmuxAdapter`가 생성 시점에 한 번 푼다 — PATH 다음에 아는 번들 자리
+(`resolve_cmux`, `cmux.py`).
+
+**검사만 고치면 안 된다.** 어댑터가 `self.executable` 로 cmux 를 부르는 자리가
+여섯이라, 시작 검사만 통과시키면 실제 호출에서 죽는다. 그게 이 검사가 애초에
+막으려던 "초록불인데 아무것도 안 되는 상태"다.
+
+못 찾으면 이름을 그대로 돌려준다. **조용히 성공시키지 않는다** — 시작 검사가
+지금처럼 걸려서 죽어야 한다.
+
+### 검증 — 실패하던 그 환경으로
+
+```
+$ env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin ...
+최소 PATH 에서 which: None
+resolve_cmux()      : /Applications/cmux.app/Contents/Resources/bin/cmux
+어댑터가 든 값      : /Applications/cmux.app/Contents/Resources/bin/cmux
+discover_agents()   : 에이전트 6개 발견
+```
+
+검사 통과만 본 것이 아니라 **그 경로로 cmux 를 실제로 불러 에이전트를 찾는
+것까지** 확인했다. `pytest 175`.
+
+## 크래시가 fungis 탓인가 — 지금까지 나온 것
+
+**단정할 근거가 없다.** 사용자 공간 앱(Python daemon · SwiftUI)이 macOS 를
+패닉시키는 것은 일반적으로 드라이버·하드웨어 쪽 일이라 가능성이 낮다.
+
+재부팅 8분 뒤 실측한 부하가 비정상으로 높았다.
+
+```
+load average  5.89  24.91  19.31   (uptime 8분)
+상위 프로세스  WindowServer 50.5% · logioptionsplus_agent 16.4% · cmux 16.1%
+```
+
+fungis 는 이때 떠 있지도 않았다. **Logitech Options+ 와 WindowServer 가 눈에
+띄고, Karabiner 도 돈다.** 조사한다면 이쪽이 먼저다.
+
+- 볼 곳: `/Library/Logs/DiagnosticReports/` (커널 패닉은 시스템 쪽에 쌓인다.
+  사용자 쪽 `~/Library/Logs/DiagnosticReports/` 가 아니다). 이번에는 접근이
+  막혀 목록을 못 읽었다 — 손으로 확인이 필요하다
+- 재부팅 시각: `last reboot` 기준 2026-08-19 19:40
+
+---
 
 제품 명세: [PRODUCT_SPEC.md](PRODUCT_SPEC.md)
 보드 프로토콜: [BOARD_PROTOCOL.md](BOARD_PROTOCOL.md) — 에이전트가 보드를 읽고 쓰는 법
 에이전트 CLI: [CLI.md](CLI.md) — 동사 셋, 주소 넷, 자리별 기본 수신자
 고칠 목록: [BACKLOG.md](BACKLOG.md) — 리팩토링 비판 웨이브의 일감. 위치·완료 기준까지
 저장소 상태: 로컬 Git repository, branch `cross-project`. 구현 기준 SHA는 아래 착지 정보에 기록한다.
+
+# 2026-08-19 착지
+
+## 이날 고친 것
+
+| commit | 무엇 |
+|---|---|
+| `74617e9` | 역할을 **화면에 보이는 대로**(`@이름`) 칠 수 있게. HQ 타임라인 `to` 가 `claude-난수` 로 뜨던 것도 같은 뿌리라 함께 |
+| `6e6c351` | 아무도 안 받았을 때 그렇다고 말한다. 일반 방 `send` 는 지목이 없으면 아무도 안 받는데 성공 출력이 실패처럼 안 보였다 |
+
+`pytest 173` · `swift 26` · 앱 번들 갱신됨.
+
+둘 다 **루프 손 시행 중에 실사용으로 드러난 것**이다. 앞의 것은 내가 `state`
+화면에서 읽은 값을 그대로 쳤다가 `409 FOREIGN KEY constraint failed` 를 맞았고,
+뒤의 것은 한 리드가 세 번 연속 아무에게도 안 가는 메시지를 보냈다.
+
+**공통 교훈**: 화면이 보여주는 형태와 칠 수 있는 형태가 다르면 베껴 친 사람은
+이유를 알 수 없다.
+
+## 루프 시행 기록 — 이 저장소 밖에 있다
+
+`~/kr.homil/dispatch-ops/` (git 밖)
+
+- `LOOP.md` — 운영 루프 설계 (8/18, 485줄, "남은 미결: 없음")
+- `LOOP-RUN-1.md` — 첫 시행 완결본. ARCH-3/TICKET-044, **완주** (잎 6·약 1시간·정지 0회)
+- `LOOP-RUN-2.md` — 둘째 시행(문서 대수선 에픽) 진행 중. **정지 1시간 사례**
+- `RETRO-hq.md` · `CROSS-PROJECT.md` — HQ 웨이브 회고와 기획
+
+### 두 시행이 같은 결핍의 두 얼굴을 보여줬다
+
+```
+044 ③  걸음이 보고 왕복보다 짧다   정지와 작업 중 구분 불가  → 오탐 핑 2회
+045 ①  착수만 선언하고 턴이 없다   일이 있는데 턴이 없음     → 진짜 정지 1시간
+```
+
+044 에서는 일하고 있는데 죽은 줄 알았고, 045 에서는 죽어 있는데 일하는 줄 알았다.
+**밖에서 보이는 침묵 하나로 둘을 가를 수 없다.**
+
+그리고 archivia 와 mei 가 서로 모르고 같은 값을 가리켰다 — archivia 는 정지를 겪고
+`wake --in`(자기 예약)이 그 자리라고 했고, mei 는 같은 날 `next_wake_at` 이 어댑터
+경계에서 제일 값진 값이라고 했다. **둘이 같은 값이다.**
+
+→ 루프 v0 의 항목 둘(상태 판정기 · wake 예약)이 하나로 접힌다.
+어댑터가 내는 것은 상태 5종이 아니라 **`(state, next_wake_at)` 쌍**이다.
+
+## PM 답을 기다리는 것
+
+1. **`LOOP.md` 반영 여부** — v0 상태 판정기의 출력에 `next_wake_at` 추가하고,
+   어댑터 경계의 질문을 "밀어 넣어도 되나"에서 **"언제 반응하나"**로 바꿀지.
+   mei 에서는 앞 질문의 답이 항상 예라서 뜻이 없다. 045 정지 1시간이 실측 근거다
+2. **보조인력이 `r2`(티켓 경계)를 승인할 수 있나.** `r3` 는 소유자로 둘 생각이다
+3. **보조인력이 맥인가 윈도우인가.** 맥이면 오늘 구조로 붙고, 윈도우면 앱이
+   SwiftUI 라 화면이 없는 것이 벽이라 M1 인증이 선행이다
+4. ~~cmux PATH 폴백~~ — 넣었다 (`2398fc4`)
+
+## 미보고
+
+에픽 초안(`EPIC-participation.md`)과 보드 등록(`FUNG-3`~`FUNG-8`) 결과를 PM 에게
+아직 못 보냈다. **서버가 내려가 있어 보낼 수 없었다.** 서버가 살아나면 이것부터
+보낸다.
+
+---
 
 ## 읽는 순서
 
@@ -19,14 +217,27 @@
 
 - 원격 저장소: `git@github.com:hi-proxy/fungis.git`
 - 기준 branch: `cross-project`
-- 구현 기준 commit: `40e5360` (`docs: turn the critique wave into a work list`)
+- 구현 기준 commit: `2398fc4` (`fix: find cmux when the app's PATH does not have it`)
 
 ### 브랜치 운용
 
-- **main 이 바깥 얼굴이다.** 웨이브가 끝나면 `--squash` 로 통짜 한 커밋을 만들어
-  main 에만 push 한다. 작업 브랜치는 push 하지 않는다.
+- **main 이 바깥 얼굴이다.** 웨이브가 끝나면 통짜 한 커밋을 만들어 main 에만
+  push 한다. 작업 브랜치는 push 하지 않는다. 두 번째 웨이브부터 `--squash` 는
+  항상 충돌한다 — 첫 통짜에서 이력이 갈라져 같은 변경이 두 번 온 것으로 보인다.
+  내용을 다시 풀지 말고 작업 브랜치의 트리를 그대로 커밋으로 만든다:
+
+  ```bash
+  NEW=$(git commit-tree cross-project^{tree} -p main -F msg.txt)
+  git update-ref refs/heads/main "$NEW"
+  git diff main cross-project --stat   # 비어야 한다
+  ```
 - **작업 브랜치는 실험 노트다.** 시행착오 커밋까지 그대로 남긴다 — 이 문서와
   BACKLOG 가 그 커밋 본문을 참조한다. 지우면 다음 맥락의 읽을거리가 죽는다.
+- **`cross-project` 는 2026-09-02 만료다.** HQ 웨이브가 닫혔고 당분간 이대로
+  쓰기로 했다. main `3de4f19` 가 같은 트리를 통짜로 담고 있으므로 코드는 잃을
+  것이 없다. 만료로 잃는 것은 시행착오 커밋 본문뿐이며, 그 요지는 main 통짜
+  본문과 이 문서에 남아 있다. 보드의 FUNG 티켓이 만료 알림이다. 그 전에 새
+  웨이브를 시작하면 main 에서 새 브랜치를 파고 이것은 그때 지워도 된다.
 - **dev 브랜치를 두고 main 에 merge 커밋을 반복하는 방식으로 돌아가지 않는다.**
   예전 이력이 `Merge branch 'dev'` 로 도배됐던 그 방식이다. 브랜치는 웨이브
   단위로 만들고, 끝나면 squash 로 main 에 얹고, 노트로 남긴다.
@@ -339,6 +550,25 @@ FungisMac/build-app.sh
 2. M2 실제 다중 클라이언트 LAN/VPN 검증과 soak
 3. M3 Windows Node와 PowerShell/WSL terminal adapter
 4. M4 Windows PM desktop client
+
+### 잡아 둔 에픽 — 사람과 여러 클라이언트
+
+초안: [EPIC-participation.md](EPIC-participation.md) · 보드: `FUNG-3` ~ `FUNG-8`
+
+보조인력(PM2) 투입을 검토하다 나왔다. 같은 빈자리가 **두 번** 드러났다 — HQ 를
+만들 때 한 번(구성원이 역할이 아니라 소집된 방의 lead 라 특례 분기를 넣었다),
+사람을 방 하나에만 넣으려 할 때 또 한 번. 빠진 개념은 **참가**다.
+
+`db.py:601` 주석이 스스로 그렇게 말한다 — "참가 = 역할 보유로 본다. 지금 모델에서
+방에 있다는 것을 말하는 다른 수단이 없다."
+
+`membership(workspace_id, principal_id)` 을 일급으로 놓으면 특례 둘(human 무조건
+통과 · HQ 분기)이 **지워진다.** 코드가 느는 게 아니라 준다. 잎 순서와 닫힘 판정은
+초안 문서에 있다. **착수 전이고 PM 승인 대기다.**
+
+한 가지는 임시로 하지 않기로 했다 — 사람을 `role_assignments` 에 먼저 앉혀 두고
+나중에 걷어내는 것. 굳으면 훨씬 비싸다. **PM2 를 넣는 시점 = membership 하는
+시점**으로 묶는다.
 
 ### 정했으나 아직 안 만든 것
 
