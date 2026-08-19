@@ -89,7 +89,12 @@ final class AppModel: ObservableObject {
             } catch {
                 if !switchingProject {
                     isConnected = false
-                    errorMessage = error.localizedDescription
+                    // 첫 실패는 조용히 재접속한다. 2초 뒤 다시 붙으면 사람이
+                    // 알 필요가 없던 일이다. 연속으로 실패할 때만 말한다.
+                    streamFailures += 1
+                    if streamFailures >= 2 {
+                        errorMessage = error.localizedDescription
+                    }
                 }
             }
             // 프로젝트를 바꿔 끊은 스트림이면 물러서지 않고 바로 다시 붙는다.
@@ -483,11 +488,23 @@ final class AppModel: ObservableObject {
     }
 
     func setRoleLead(roleID: String, isLead: Bool) async -> Bool {
+        // 저장중 표시. 소집 모달이 이 동안 lead 칩을 비활성화한다.
+        // refresh()는 isMutating이면 물러서므로 끄고 나서 부른다.
+        isMutating = true
         let ok = await runBoard {
             try await self.api.setRoleLead(roleID: roleID, isLead: isLead)
         }
+        isMutating = false
         if ok { await refresh() }
         return ok
+    }
+
+    /// 소집 모달이 닫힐 때 한 번 부른다. 모달이 열리기 전과 닫힌 후의
+    /// lead 차이만 서버가 그 담당자에게 안내한다. 즉시 보내면 모달 안에서
+    /// 갈아탄 앞사람이 안내를 받아 놓고 lead가 아니게 된다.
+    func flushLeadAnnouncements() async {
+        do { try await api.flushLeadAnnouncements() }
+        catch { errorMessage = String(describing: error) }
     }
 
     /// 보드를 고치는 것은 전부 같은 모양이다 — 해보고, 되면 다시 읽는다.
@@ -503,7 +520,10 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var streamFailures = 0
+
     private func apply(_ freshSnapshot: FungisSnapshot) {
+        streamFailures = 0
         var fresh = freshSnapshot
         guard fresh.projectID == selectedProjectID else { return }
         let isNewTimeline = timelineProjectID != fresh.projectID

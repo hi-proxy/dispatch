@@ -374,9 +374,22 @@ def create_web_app(
         project_id = websocket.query_params.get("project_id", "local")
         previous = ""
         last_sent = 0.0
+        # 서버 응답 지연이나 cmux 탐색 지연으로 한 박동이 실패해도 소켓을
+        # 죽이지 않는다. 죽이면 앱이 2초 뒤 다시 붙어 자가 치유되지만 그때마다
+        # "소켓 연결되지 않음" 토스트가 깜빡인다. 일시 장애는 박동만 거르고,
+        # 연속으로 이어지면 진짜 장애이므로 닫아서 앱이 알게 한다.
+        failures = 0
         try:
             while True:
-                snapshot = await asyncio.to_thread(build_state, project_id)
+                try:
+                    snapshot = await asyncio.to_thread(build_state, project_id)
+                    failures = 0
+                except Exception:
+                    failures += 1
+                    if failures >= 3:
+                        raise
+                    await asyncio.sleep(2)
+                    continue
                 fingerprint = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
                 now = time.monotonic()
                 if fingerprint != previous or now - last_sent >= 15:
@@ -536,6 +549,16 @@ def create_web_app(
         try:
             with client() as pm:
                 return pm.set_role_lead(role_id, payload.is_lead)
+        except Exception as error:
+            raise fail(error) from error
+
+    @app.post("/api/lead-announcements/flush")
+    def flush_lead_announcements() -> dict:
+        # 소집 모달이 닫힐 때 앱이 부른다. 무엇이 바뀌었는지는 서버가
+        # 기억과의 차이로 계산하므로 여기에는 실을 것이 없다.
+        try:
+            with client() as pm:
+                return pm.flush_lead_announcements()
         except Exception as error:
             raise fail(error) from error
 

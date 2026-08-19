@@ -377,6 +377,14 @@ class FungisDB:
         # 닫힌 HQ가 자리를 붙들면 새 HQ를 영영 못 만든다. 이 코드의 다른
         # "하나만" 인덱스 중 삭제 술어를 가진 것은 unique_active_role_name
         # 하나뿐인데, 여기서는 그쪽을 본보기로 삼는다.
+        if "announced_lead_role_id" not in project_columns:
+            # lead 안내는 소집 모달이 닫힐 때 한 번에 나간다. 서버가 "마지막으로
+            # 안내한 lead"를 기억해야 지금 상태와의 차이만 보낼 수 있다.
+            # NULL은 아직 아무에게도 안내한 적이 없다는 뜻이라, 이미 lead가
+            # 있는 방은 첫 flush에서 못 받았던 지정 안내를 받는다.
+            self._connection.execute(
+                "ALTER TABLE projects ADD COLUMN announced_lead_role_id TEXT"
+            )
         if "ticket_prefix" not in project_columns:
             # 티켓 이름은 방마다 다르다. 프리픽스가 방을 들고 다니므로
             # ARCH-12 한 토큰이 어느 방 몇 번인지 다 말한다. 방 이름을 바꿔도
@@ -685,16 +693,16 @@ class FungisDB:
         room = self.project_name(workspace_id)
         if self.is_hq(workspace_id):
             return (
-                f'"{room}" 는 소집된 방의 lead 만 쓴다. 너는 지금 어느 방의 '
-                "lead 도 아니다. 네 방 lead 를 통하거나 PM 에게 요청하라."
+                f'"{room}"는 소집된 방의 lead만 쓴다. 너는 지금 어느 방의 '
+                "lead도 아니다. 네 방 lead를 통하거나 PM에게 요청하라."
             )
         mine = [item["name"] for item in self.principal_projects(principal_id)]
         if mine:
             joined = ", ".join(f'"{name}"' for name in mine)
-            return f'너는 "{room}" 소속이 아니다. 속한 프로젝트는 {joined} 이다.'
+            return f'너는 "{room}" 소속이 아니다. 속한 프로젝트는 {joined}이다.'
         return (
             f'너는 "{room}" 소속이 아니다. 속한 프로젝트가 하나도 없다. '
-            "PM 에게 배정을 요청하라."
+            "PM에게 배정을 요청하라."
         )
 
     def members(self, workspace_id: str) -> dict[str, Any]:
@@ -926,10 +934,10 @@ class FungisDB:
         if lead is not None and lead.get("agent_id") == actor_id:
             return None
         room = self.project_name(project_id)
-        head = f'"{room}" 보드는 그 방 lead 나 PM 만 쓴다.'
+        head = f'"{room}" 보드는 그 방 lead나 PM만 쓴다.'
         if lead is None or not lead.get("agent_id"):
-            return f'{head} "{room}" 에는 지금 lead 가 없다. PM 에게 요청하라.'
-        return f'{head} "{room}" lead 는 {lead["agent_name"]} 다. 그에게 부탁하라.'
+            return f'{head} "{room}"에는 지금 lead가 없다. PM에게 요청하라.'
+        return f'{head} "{room}" lead는 {lead["agent_name"]}다. 그에게 부탁하라.'
 
     def resolve_room_id(self, given: str) -> str | None:
         """방 이름·티켓 프리픽스·ID 를 방 ID 로 푼다. 아니면 None.
@@ -1116,6 +1124,53 @@ class FungisDB:
                 (project_id,),
             ).fetchone()
         return dict(row) if row else None
+
+    def flush_lead_announcements(self) -> list[dict[str, Any]]:
+        """마지막으로 안내한 lead와 지금 lead의 차이를 돌려주고 기억을 맞춘다.
+
+        소집 모달이 닫힐 때 한 번 불린다. 모달 안에서 A로 세웠다 B로 바꿔도
+        여기서는 열리기 전 상태와 닫힌 후 상태의 차이만 남는다 — A는 어디에도
+        나타나지 않는다. 담당자 없는 lead 역할은 보낼 사람이 없으므로 기억만
+        갱신한다. HQ는 역할이 0건이라 자연히 지나간다.
+        """
+        changes: list[dict[str, Any]] = []
+        with self.transaction() as conn:
+            projects = conn.execute(
+                """SELECT id, name, announced_lead_role_id FROM projects
+                   WHERE archived_at IS NULL AND kind != 'hq'
+                   ORDER BY created_at, name"""
+            ).fetchall()
+            for project in projects:
+                current = conn.execute(
+                    """SELECT r.id AS role_id, a.agent_id FROM workspace_roles r
+                       LEFT JOIN role_assignments a
+                         ON a.role_id = r.id AND a.ended_at IS NULL
+                       WHERE r.workspace_id = ? AND r.deleted_at IS NULL
+                         AND r.is_lead = 1""",
+                    (project["id"],),
+                ).fetchone()
+                current_role_id = current["role_id"] if current else None
+                if current_role_id == project["announced_lead_role_id"]:
+                    continue
+                released = None
+                if project["announced_lead_role_id"]:
+                    row = conn.execute(
+                        """SELECT agent_id FROM role_assignments
+                           WHERE role_id = ? AND ended_at IS NULL""",
+                        (project["announced_lead_role_id"],),
+                    ).fetchone()
+                    released = row["agent_id"] if row else None
+                conn.execute(
+                    "UPDATE projects SET announced_lead_role_id = ? WHERE id = ?",
+                    (current_role_id, project["id"]),
+                )
+                changes.append({
+                    "project_id": project["id"],
+                    "project_name": project["name"],
+                    "released_agent_id": released,
+                    "appointed_agent_id": current["agent_id"] if current else None,
+                })
+        return changes
 
     def hq(self) -> dict[str, Any] | None:
         with self._lock:
@@ -1706,7 +1761,7 @@ class FungisDB:
         if lead is None or not lead.get("agent_id"):
             room = self.project_name(room_id)
             raise ValueError(
-                f'"{room}" 에는 지금 lead 가 없다. PM 에게 물어라.'
+                f'"{room}"에는 지금 lead가 없다. PM에게 물어라.'
             )
         return str(lead["agent_id"])
 
