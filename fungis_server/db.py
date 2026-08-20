@@ -180,6 +180,26 @@ CREATE TABLE IF NOT EXISTS role_assignments (
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_assignment_per_role
 ON role_assignments(role_id) WHERE ended_at IS NULL;
 
+-- 누가 이 방에 있나. 역할과 따로 서는 개념이다.
+--
+-- 지금까지는 "역할을 갖고 있으면 방에 있는 것" 으로 봤다. 그래서 역할이
+-- 없는 자리마다 특례가 붙었다 — 사람은 통째로 통과, HQ 는 소집된 방의
+-- lead 를 따로 뒤짐. 두 번 특례면 개념이 빠진 것이고, 빠진 것이 참가다.
+--
+-- source 는 어떻게 들어왔는지다. 회수 규칙이 갈래마다 다르므로(역할이
+-- 끝나면 나가나, 소집 해제면 나가나) 판단 근거를 남겨 둔다. 그 규칙 자체는
+-- 아직 안 정했다 — FUNG-4 에서 읽기를 갈아끼울 때 정한다.
+CREATE TABLE IF NOT EXISTS memberships (
+    workspace_id TEXT NOT NULL REFERENCES projects(id),
+    principal_id TEXT NOT NULL REFERENCES principals(id),
+    source TEXT NOT NULL CHECK (source IN ('role', 'hq_lead', 'owner')),
+    joined_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (workspace_id, principal_id, source)
+);
+
+CREATE INDEX IF NOT EXISTS membership_by_principal
+ON memberships(principal_id);
+
 CREATE TABLE IF NOT EXISTS message_role_recipients (
     role_id TEXT NOT NULL REFERENCES workspace_roles(id),
     message_seq INTEGER NOT NULL REFERENCES messages(seq) ON DELETE CASCADE,
@@ -440,6 +460,84 @@ class FungisDB:
                     "INSERT OR IGNORE INTO projects(id, name) VALUES (?, ?)",
                     (workspace_id, workspace_id if workspace_id != "local" else "Local"),
                 )
+        # 방을 다 만든 뒤라야 참가가 걸릴 자리가 있다.
+        self._backfill_memberships()
+
+    # 참가를 지금 판정에서 그대로 유도하는 세 갈래. 여기 적힌 것이 곧
+    # workspace_participant 가 하는 일이라, 셋을 합치면 같은 답이 나와야 한다.
+    MEMBERSHIP_SOURCES = {
+        # 역할을 맡고 있으면 그 방에 있다.
+        "role": """SELECT DISTINCT a.workspace_id, a.agent_id
+                     FROM role_assignments a
+                     JOIN projects p ON p.id = a.workspace_id
+                    WHERE a.ended_at IS NULL""",
+        # HQ 에는 역할이 없다. 구성원은 소집된 방의 lead 다.
+        "hq_lead": """SELECT DISTINCT hq.id, a.agent_id
+                        FROM workspace_roles r
+                        JOIN role_assignments a
+                          ON a.role_id = r.id AND a.ended_at IS NULL
+                        JOIN projects p ON p.id = r.workspace_id
+                        JOIN projects hq ON hq.kind = 'hq'
+                       WHERE r.is_lead = 1 AND r.deleted_at IS NULL
+                         AND p.parent_id IS NOT NULL AND p.archived_at IS NULL""",
+        # 사람은 모든 방을 본다. 지금 규칙 그대로다 — 이것을 좁히는 것이
+        # 이 에픽의 목적이지만, 백필이 할 일은 옮기는 것이지 고치는 것이 아니다.
+        #
+        # **보관된 방도 넣는다.** 지금 판정은 사람이면 보관 여부를 안 본다.
+        # 여기서 걸렀더니 실제 데이터에서 네 쌍이 어긋났다 — 조건을 하나 더
+        # 얹는 것이 곧 규칙을 바꾸는 것이다.
+        "owner": """SELECT p.id, pr.id
+                      FROM projects p, principals pr
+                     WHERE pr.kind = 'human'""",
+    }
+
+    def _backfill_memberships(self) -> None:
+        """참가를 지금 판정에서 유도해 채운다. 부팅마다 다시 센다.
+
+        아직 아무도 이 표를 안 읽는다 — 읽기를 갈아끼우는 것은 FUNG-4 다.
+        그때까지는 순수한 파생값이라, 쓰기 지점을 여기저기 심는 것보다 다시
+        세는 편이 안전하다. **빠뜨린 쓰기 지점 하나가 곧 못 읽는 방 하나다.**
+
+        joined_at 을 지키려고 통째로 지우지 않는다. 늘어난 것만 넣고 없어진
+        것만 뺀다.
+        """
+        for source, query in self.MEMBERSHIP_SOURCES.items():
+            wanted = {
+                (str(row[0]), str(row[1]))
+                for row in self._connection.execute(query)
+            }
+            held = {
+                (str(row["workspace_id"]), str(row["principal_id"]))
+                for row in self._connection.execute(
+                    "SELECT workspace_id, principal_id FROM memberships WHERE source = ?",
+                    (source,),
+                )
+            }
+            for workspace_id, principal_id in wanted - held:
+                self._connection.execute(
+                    """INSERT OR IGNORE INTO memberships(
+                           workspace_id, principal_id, source
+                       ) VALUES (?, ?, ?)""",
+                    (workspace_id, principal_id, source),
+                )
+            for workspace_id, principal_id in held - wanted:
+                self._connection.execute(
+                    """DELETE FROM memberships
+                        WHERE workspace_id = ? AND principal_id = ? AND source = ?""",
+                    (workspace_id, principal_id, source),
+                )
+
+    def is_member(self, *, workspace_id: str, principal_id: str) -> bool:
+        """참가 표로만 판정한다. 아직 아무도 안 쓴다 — FUNG-4 가 쓴다.
+
+        지금은 `workspace_participant` 와 같은 답을 내는지 재는 데만 쓴다.
+        """
+        with self._lock:
+            return self._connection.execute(
+                """SELECT 1 FROM memberships
+                    WHERE workspace_id = ? AND principal_id = ? LIMIT 1""",
+                (workspace_id, principal_id),
+            ).fetchone() is not None
 
     def close(self) -> None:
         with self._lock:

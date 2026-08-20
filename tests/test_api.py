@@ -849,6 +849,114 @@ def test_archiving_a_project_keeps_messages_and_ends_assignments(tmp_path):
         assert client.delete(f"/v1/projects/{project['id']}").status_code == 404
 
 
+def test_membership_answers_exactly_what_the_old_rule_answered(tmp_path):
+    """참가 표가 지금 판정과 모든 방에서 같은 답을 내는가.
+
+    FUNG-3 의 닫힘 판정이다. 아직 아무도 이 표를 안 읽으므로(FUNG-4 가
+    갈아끼운다), 지금 할 수 있는 검증은 **두 답이 어긋나지 않는 것** 하나다.
+
+    갈래 셋을 한 판에 다 세운다 — 역할 보유자·소집된 방의 lead(HQ)·사람.
+    셋 중 하나만 빠져도 그 사람이 읽던 방을 못 읽게 된다.
+    """
+    from fungis_server.db import FungisDB
+
+    path = tmp_path / "members.db"
+    app = create_app(path)
+    with TestClient(app) as client:
+        for principal_id, kind in (
+            ("pm", "human"), ("lead-a", "agent"),
+            ("worker-b", "agent"), ("outside", "agent"),
+        ):
+            client.put(
+                f"/v1/principals/{principal_id}",
+                json={"id": principal_id, "kind": kind, "display_name": principal_id},
+            )
+        # 소집된 방 하나(HQ 의 자식)와 소집 안 된 방 하나.
+        client.post("/v1/projects", json={"id": "alpha", "name": "alpha"})
+        client.post("/v1/projects", json={"id": "beta", "name": "beta"})
+        # 보관된 방. 지금 판정은 사람에게 보관 여부를 안 묻는다 — 이 방이
+        # 없으면 백필에 archived 조건을 얹어도 통과해 버린다. 실제 데이터에서
+        # 네 쌍이 그렇게 어긋났다.
+        client.post("/v1/projects", json={"id": "gone", "name": "gone"})
+        client.delete("/v1/projects/gone")
+        join(client, "alpha", "lead-a", lead=True)
+        join(client, "beta", "worker-b")
+        # 소집은 lead 가 앉은 뒤라야 걸린다. 순서가 거꾸로면 조용히 안 걸리고,
+        # 그러면 HQ 갈래를 안 재고도 통과해 버린다.
+        assert client.put(
+            "/v1/projects/alpha/board-link", json={"hq_id": "hq"}
+        ).status_code == 200
+
+    # 부팅 백필이 도는 자리라 새 Database 로 연다.
+    database = FungisDB(path)
+    try:
+        rooms = ["hq", "alpha", "beta", "local", "gone"]
+        people = ["pm", "lead-a", "worker-b", "outside"]
+        for room in rooms:
+            for person in people:
+                assert database.is_member(
+                    workspace_id=room, principal_id=person
+                ) == database.workspace_participant(
+                    workspace_id=room, principal_id=person
+                ), f"{person} 이 {room} 에서 어긋난다"
+
+        # 어긋나지 않는다는 것만으로는 둘 다 비었을 수 있다. 갈래마다
+        # 적어도 하나씩은 실제로 잡혔는지 본다.
+        assert database.is_member(workspace_id="alpha", principal_id="lead-a")
+        assert database.is_member(workspace_id="hq", principal_id="lead-a")
+        assert database.is_member(workspace_id="beta", principal_id="worker-b")
+        assert database.is_member(workspace_id="beta", principal_id="pm")
+        # 소집 안 된 방의 역할 보유자는 HQ 에 못 들어온다.
+        assert not database.is_member(workspace_id="hq", principal_id="worker-b")
+        assert not database.is_member(workspace_id="alpha", principal_id="outside")
+    finally:
+        database.close()
+
+
+def test_membership_backfill_forgets_what_ended(tmp_path):
+    """역할이 끝나면 그 참가도 사라진다. 부팅마다 다시 세기 때문이다.
+
+    지금 판정이 `ended_at IS NULL` 을 보므로 그것과 같아야 한다. 남길지
+    말지는 FUNG-4 에서 정할 일이고, 여기서는 지금 규칙을 그대로 옮긴다.
+    """
+    from fungis_server.db import FungisDB
+
+    path = tmp_path / "ended.db"
+    app = create_app(path)
+    with TestClient(app) as client:
+        for principal_id, kind in (("pm", "human"), ("hand", "agent")):
+            client.put(
+                f"/v1/principals/{principal_id}",
+                json={"id": principal_id, "kind": kind, "display_name": principal_id},
+            )
+        client.post("/v1/projects", json={"id": "alpha", "name": "alpha"})
+        role = client.post(
+            "/v1/workspaces/alpha/roles", json={"name": "hand"}
+        ).json()
+        client.put(
+            f"/v1/roles/{role['id']}/assignment",
+            json={"agent_id": "hand", "assigned_by": "pm", "send_onboarding": False},
+        )
+
+    first = FungisDB(path)
+    try:
+        assert first.is_member(workspace_id="alpha", principal_id="hand")
+    finally:
+        first.close()
+
+    with TestClient(create_app(path)) as client:
+        client.delete(f"/v1/roles/{role['id']}/assignment", params={"ended_by": "pm"})
+
+    second = FungisDB(path)
+    try:
+        assert not second.is_member(workspace_id="alpha", principal_id="hand")
+        assert not second.workspace_participant(
+            workspace_id="alpha", principal_id="hand"
+        )
+    finally:
+        second.close()
+
+
 def test_workspace_timeline_is_readable_only_by_participants(tmp_path):
     """대화는 그 방 사람만 읽는다. 명단은 아니다.
 
