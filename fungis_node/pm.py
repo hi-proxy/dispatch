@@ -348,7 +348,8 @@ class PMClient:
     def attention(self) -> list[dict]:
         result = self._request(
             "GET",
-            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/attention",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/attention"
+            f"?caller={urllib.parse.quote(self.caller_id or '')}",
         )
         assert isinstance(result, list)
         return result
@@ -546,10 +547,11 @@ class PMClient:
         self._request("DELETE", f"/v1/board/edges?{query}")
 
     def shared(self, keys: list[str] | None = None) -> list[dict]:
-        query = urllib.parse.urlencode({"keys": keys or []}, doseq=True)
-        suffix = f"?{query}" if query else ""
+        query = urllib.parse.urlencode(
+            {"caller": self.caller_id or "", "keys": keys or []}, doseq=True
+        )
         result = self._request(
-            "GET", f"/v1/shared/{urllib.parse.quote(self.workspace_id)}{suffix}"
+            "GET", f"/v1/shared/{urllib.parse.quote(self.workspace_id)}?{query}"
         )
         assert isinstance(result, list)
         return result
@@ -575,7 +577,8 @@ class PMClient:
     def bookmarks(self) -> list[dict]:
         result = self._request(
             "GET",
-            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/bookmarks",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/bookmarks"
+            f"?caller={urllib.parse.quote(self.caller_id or '')}",
         )
         assert isinstance(result, list)
         return result
@@ -641,7 +644,8 @@ class PMClient:
     def timeline_pins(self) -> list[dict]:
         result = self._request(
             "GET",
-            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/timeline-pins",
+            f"/v1/workspaces/{urllib.parse.quote(self.workspace_id)}/timeline-pins"
+            f"?caller={urllib.parse.quote(self.caller_id or '')}",
         )
         assert isinstance(result, list)
         return result
@@ -665,7 +669,9 @@ class PMClient:
 
     def work_items(self) -> list[dict]:
         result = self._request(
-            "GET", f"/v1/work/{urllib.parse.quote(self.workspace_id)}"
+            "GET",
+            f"/v1/work/{urllib.parse.quote(self.workspace_id)}"
+            f"?caller={urllib.parse.quote(self.caller_id or '')}",
         )
         assert isinstance(result, list)
         return result

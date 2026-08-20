@@ -62,7 +62,12 @@ class InboxWatcher:
         if existing_claim:
             after = max(after, int(existing_claim["through_seq"]))
         messages = self._http_get(
-            "/v1/messages", {"recipient": self.recipient_id, "after": after}
+            "/v1/messages",
+            {
+                "recipient": self.recipient_id,
+                "caller": self.recipient_id,
+                "after": after,
+            },
         )
         assert isinstance(messages, list)
         if messages:

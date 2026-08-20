@@ -72,8 +72,15 @@ cd FungisMac && swift test
 
 ## 문서
 
-- [제품 계약과 마일스톤](docs/PRODUCT_SPEC.md)
-- [현재 착지 상태와 재시작 절차](docs/HANDOFF.md)
+**이 저장소에 없다.** `fungis-docs` 를 본다.
+
+    ~/kr.homil/fungis-docs/
+
+제품 계약과 마일스톤(`PRODUCT_SPEC.md`), 현재 착지 상태와 재시작 절차
+(`HANDOFF.md`), 에이전트 CLI(`CLI.md`), 보드 프로토콜(`BOARD_PROTOCOL.md`),
+고칠 목록(`BACKLOG.md`), 에픽 초안(`EPIC-*.md`)이 거기 있다.
+
+같은 자리에 운영 루프 설계(`LOOP.md`)와 시행 기록도 있다. 자체 레포다.
 
 ## 범위
 

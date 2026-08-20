@@ -48,7 +48,7 @@ def test_message_flow(tmp_path):
             assert event["through_seq"] == message["seq"]
 
         messages = client.get(
-            "/v1/messages", params={"recipient": agent["id"], "after": 0}
+            "/v1/messages", params={"recipient": agent["id"], "caller": agent["id"], "after": 0}
         ).json()
         assert [item["body"] for item in messages] == ["hello"]
         state = client.post(
@@ -85,7 +85,7 @@ def test_project_message_bookmarks_are_ordered_and_deletable(tmp_path):
             json={"label": "디자인 웨이브1 완료", "created_by": "pm"},
         )
 
-        bookmarks = client.get("/v1/workspaces/local/bookmarks").json()
+        bookmarks = client.get("/v1/workspaces/local/bookmarks", params={"caller": "pm"}).json()
         assert [item["message_seq"] for item in bookmarks] == [
             messages[0]["seq"], messages[1]["seq"]
         ]
@@ -94,7 +94,7 @@ def test_project_message_bookmarks_are_ordered_and_deletable(tmp_path):
             f"/v1/workspaces/local/bookmarks/{later['id']}"
         ).status_code == 204
         assert [item["label"] for item in client.get(
-            "/v1/workspaces/local/bookmarks"
+            "/v1/workspaces/local/bookmarks", params={"caller": "pm"}
         ).json()] == ["디자인 웨이브1 완료"]
 
 
@@ -125,7 +125,7 @@ def test_timeline_pins_mark_message_gaps_separately_from_bookmarks(tmp_path):
             json={"label": "디자인 웨이브1 완료", "created_by": "pm"},
         )
 
-        pins = client.get("/v1/workspaces/local/timeline-pins").json()
+        pins = client.get("/v1/workspaces/local/timeline-pins", params={"caller": "pm"}).json()
         assert [pin["after_message_seq"] for pin in pins] == [
             messages[0]["seq"], messages[1]["seq"]
         ]
@@ -137,7 +137,7 @@ def test_timeline_pins_mark_message_gaps_separately_from_bookmarks(tmp_path):
             f"/v1/workspaces/local/timeline-pins/{second['id']}"
         ).status_code == 204
         assert [pin["label"] for pin in client.get(
-            "/v1/workspaces/local/timeline-pins"
+            "/v1/workspaces/local/timeline-pins", params={"caller": "pm"}
         ).json()] == ["디자인 웨이브1 완료"]
 
 
@@ -301,13 +301,14 @@ def test_shared_values_are_versioned_selectable_and_deletable(tmp_path):
             json={"value": "r3 before deletion"},
         )
         selected = client.get(
-            "/v1/shared/local", params=[("keys", "review-rule")]
+            "/v1/shared/local",
+                params=[("caller", "pm"), ("keys", "review-rule")],
         ).json()
         assert [(item["key"], item["value"]) for item in selected] == [
             ("review-rule", "r3 before deletion")
         ]
         assert client.delete("/v1/shared/local/repository").status_code == 204
-        assert [item["key"] for item in client.get("/v1/shared/local").json()] == [
+        assert [item["key"] for item in client.get("/v1/shared/local", params={"caller": "pm"}).json()] == [
             "review-rule"
         ]
 
@@ -315,6 +316,10 @@ def test_shared_values_are_versioned_selectable_and_deletable(tmp_path):
 def test_work_start_report_done_tracks_elapsed_without_fake_tokens(tmp_path):
     app = create_app(tmp_path / "api.db")
     with TestClient(app) as client:
+        client.put(
+            "/v1/principals/pm",
+            json={"id": "pm", "kind": "human", "display_name": "pm"},
+        )
         client.put(
             "/v1/principals/agent",
             json={"id": "agent", "kind": "agent", "display_name": "agent"},
@@ -340,7 +345,7 @@ def test_work_start_report_done_tracks_elapsed_without_fake_tokens(tmp_path):
         assert done["status"] == "done"
         assert done["ended_at"] is not None
         assert done["elapsed_seconds"] >= 0
-        listed = client.get("/v1/work/local").json()
+        listed = client.get("/v1/work/local", params={"caller": "pm"}).json()
         assert [(item["title"], item["last_report"]) for item in listed] == [
             ("build", "verified")
         ]
@@ -385,7 +390,7 @@ def test_two_pms_share_workspace_timeline_and_either_can_resolve_attention(tmp_p
             "from first PM", "need approval"
         ]
         assert client.get(
-            "/v1/workspaces/shared-room/attention"
+            "/v1/workspaces/shared-room/attention", params={"caller": "pm-a"}
         ).json()[0]["seq"] == request["seq"]
         client.post(
             "/v1/messages",
@@ -398,7 +403,7 @@ def test_two_pms_share_workspace_timeline_and_either_can_resolve_attention(tmp_p
             },
         )
         assert client.get(
-            "/v1/workspaces/shared-room/attention"
+            "/v1/workspaces/shared-room/attention", params={"caller": "pm-a"}
         ).json() == []
 
 
@@ -461,13 +466,13 @@ def test_reference_is_delivered_but_marked_as_listen_only(tmp_path):
             },
         )
         delivered = client.get(
-            "/v1/messages", params={"recipient": "builder", "after": 0}
+            "/v1/messages", params={"recipient": "builder", "caller": "builder", "after": 0}
         ).json()
         assert [item["body"] for item in delivered] == ["보고"]
         assert delivered[0]["is_reference"] == 1
 
         to_pm = client.get(
-            "/v1/messages", params={"recipient": "pm", "after": 0}
+            "/v1/messages", params={"recipient": "pm", "caller": "pm", "after": 0}
         ).json()
         assert to_pm[0]["is_reference"] == 0
 
@@ -506,7 +511,7 @@ def test_agent_chain_counts_only_since_the_last_human_message(tmp_path):
         chains = {
             item["body"]: item["agent_chain"]
             for item in client.get(
-                "/v1/messages", params={"recipient": "b", "after": 0}
+                "/v1/messages", params={"recipient": "b", "caller": "b", "after": 0}
             ).json()
         }
         assert chains == {"둘 다 본다": 0, "1": 1, "3": 3}
@@ -517,7 +522,7 @@ def test_agent_chain_counts_only_since_the_last_human_message(tmp_path):
         after = {
             item["body"]: item["agent_chain"]
             for item in client.get(
-                "/v1/messages", params={"recipient": "a", "after": 0}
+                "/v1/messages", params={"recipient": "a", "caller": "a", "after": 0}
             ).json()
         }
         assert after["정리하자"] == 0
@@ -546,7 +551,7 @@ def test_role_address_queues_until_assignment_and_preserves_history(tmp_path):
             },
         ).json()
         assert queued["recipient_ids"] == []
-        assert client.get("/v1/messages", params={"recipient": "agent-a", "after": 0}).json() == []
+        assert client.get("/v1/messages", params={"recipient": "agent-a", "caller": "agent-a", "after": 0}).json() == []
         assert client.delete(f"/v1/roles/{role['id']}").status_code == 409
 
         assigned = client.put(
@@ -558,7 +563,7 @@ def test_role_address_queues_until_assignment_and_preserves_history(tmp_path):
         ).json()
         assert assigned["agent_id"] == "agent-a"
         delivered = client.get(
-            "/v1/messages", params={"recipient": "agent-a", "after": 0}
+            "/v1/messages", params={"recipient": "agent-a", "caller": "agent-a", "after": 0}
         ).json()
         assert [item["body"] for item in delivered][0] == "queued task"
         onboarding = delivered[1]["body"]
@@ -576,7 +581,7 @@ def test_role_address_queues_until_assignment_and_preserves_history(tmp_path):
         assert history[0]["ended_at"] is None
         assert history[1]["ended_at"] is not None
         assert client.get(
-            "/v1/messages", params={"recipient": "agent-b", "after": 0}
+            "/v1/messages", params={"recipient": "agent-b", "caller": "agent-b", "after": 0}
         ).json() == []
         assert client.delete(f"/v1/roles/{role['id']}").status_code == 204
         recreated = client.post(
@@ -767,7 +772,7 @@ def test_assignment_always_carries_the_project_id(tmp_path):
         assert assigned["onboarding_sent"] is True
 
         delivered = client.get(
-            "/v1/messages", params={"recipient": "agent-a", "after": 0}
+            "/v1/messages", params={"recipient": "agent-a", "caller": "agent-a", "after": 0}
         ).json()
         assert len(delivered) == 1
         assert "fungis init --project local" in delivered[0]["body"]
@@ -1014,7 +1019,7 @@ def test_a_message_with_no_recipient_is_kept_and_read_back_as_history(tmp_path):
             "received_seq": 0, "processed_seq": 0, "pending_count": 0
         }
         assert client.get(
-            "/v1/messages", params={"recipient": "agent", "after": 0}
+            "/v1/messages", params={"recipient": "agent", "caller": "agent", "after": 0}
         ).json() == []
         # 그래도 history 로 읽힌다.
         timeline = client.get(
@@ -1244,7 +1249,7 @@ def test_a_reply_carries_what_it_answers_to_the_reader(tmp_path):
             },
         )
         delivered = client.get(
-            "/v1/messages", params={"recipient": "agent", "after": 0}
+            "/v1/messages", params={"recipient": "agent", "caller": "agent", "after": 0}
         ).json()
         assert delivered[-1]["in_reply_to_project_seq"] == asked["project_seq"]
 
@@ -1300,7 +1305,7 @@ def inbox_bodies(client, agent_id):
     return [
         item["body"]
         for item in client.get(
-            "/v1/messages", params={"recipient": agent_id, "after": 0}
+            "/v1/messages", params={"recipient": agent_id, "caller": agent_id, "after": 0}
         ).json()
     ]
 
@@ -1398,3 +1403,93 @@ def test_flush_remembers_an_assignee_less_lead_without_messaging_anyone(tmp_path
         )
         assert flush(client) == []
         assert inbox_bodies(client, "latecomer") == []
+
+
+def test_the_same_condition_gets_the_same_code_everywhere(tmp_path):
+    """없는 프로젝트에 update 는 409, 바로 아래 archive 는 404 였다.
+
+    같은 모양의 try/except 40여 벌을 손으로 베끼다 어긋난 것이다. 이제 뜻을 한
+    곳에서 정하므로 두 길이 같은 답을 준다.
+    """
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        missing = "p-does-not-exist"
+        assert client.patch(
+            f"/v1/projects/{missing}", json={"name": "새 이름"}
+        ).status_code == 404
+        assert client.delete(f"/v1/projects/{missing}").status_code == 404
+
+
+def test_an_unknown_error_does_not_dress_up_as_a_conflict(tmp_path, monkeypatch):
+    """모르는 것을 아는 척하지 않는다.
+
+    예전에는 except Exception -> 409 라 프로그래밍 버그도 409 로 나갔다. 부르는
+    쪽은 자기가 잘못 보낸 줄 알고 고치려 들지만 고칠 것이 없다.
+    """
+    from fungis_server.db import FungisDB
+
+    app = create_app(tmp_path / "api.db")
+
+    def explode(self):
+        raise TypeError("이건 서버 버그다")
+
+    monkeypatch.setattr(FungisDB, "projects", explode)
+    with TestClient(app, raise_server_exceptions=False) as client:
+        assert client.get("/v1/projects").status_code == 500
+
+
+def test_a_duplicate_id_is_still_a_conflict(tmp_path):
+    """제약 위반은 버그가 아니라 진짜 충돌이다. 409 를 유지한다."""
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        made = client.post("/v1/projects", json={"name": "한 번"}).json()
+        again = client.post(
+            "/v1/projects", json={"name": "두 번", "id": made["id"]}
+        )
+        assert again.status_code == 409
+
+
+def test_every_room_read_asks_who_is_calling(tmp_path):
+    """방 열람은 필터가 아니라 경계다. 여섯 경로가 전부 그것을 부른다.
+
+    권한 웨이브가 timeline·message·send·members 에만 caller 를 얹었고, 그 뒤에
+    붙은 읽기들은 검사 없이 방 내용을 돌려줬다 — pm_request 본문까지.
+
+    이 시험이 곧 경계 감사 목록이다. 여기 없는 읽기가 방 내용을 주고 있으면
+    그건 빠진 것이다.
+    """
+    app = create_app(tmp_path / "api.db")
+    with TestClient(app) as client:
+        for principal_id, kind in (
+            ("pm", "human"), ("inside", "agent"), ("outside", "agent")
+        ):
+            client.put(
+                f"/v1/principals/{principal_id}",
+                json={"id": principal_id, "kind": kind, "display_name": principal_id},
+            )
+        client.post("/v1/projects", json={"id": "room", "name": "room"})
+        join(client, "room", "inside")
+
+        reads = [
+            "/v1/workspaces/room/attention",
+            "/v1/workspaces/room/bookmarks",
+            "/v1/workspaces/room/timeline-pins",
+            "/v1/shared/room",
+            "/v1/work/room",
+        ]
+        for path in reads:
+            assert client.get(path, params={"caller": "inside"}).status_code == 200, path
+            denied = client.get(path, params={"caller": "outside"})
+            assert denied.status_code == 403, path
+            # 왜 막혔는지 말한다. 빈 목록으로 뭉개면 부른 쪽이 없는 줄 안다.
+            assert denied.json()["detail"], path
+            # 아무도 안 밝히면 통과시키지 않는다.
+            assert client.get(path).status_code == 422, path
+
+        # 인박스는 방이 아니라 사람에게 달려 있어 검사가 다르다.
+        assert client.get(
+            "/v1/messages", params={"recipient": "inside", "caller": "inside"}
+        ).status_code == 200
+        assert client.get(
+            "/v1/messages", params={"recipient": "inside", "caller": "outside"}
+        ).status_code == 403

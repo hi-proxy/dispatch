@@ -82,7 +82,7 @@ def test_reassigning_a_role_speaks_to_every_new_agent(tmp_path):
 
         def assign(agent_id):
             before = client.get(
-                "/v1/messages", params={"recipient": agent_id, "after": 0}
+                "/v1/messages", params={"recipient": agent_id, "caller": agent_id, "after": 0}
             ).json()
             client.put(
                 f"/v1/roles/{role['id']}/assignment",
@@ -93,7 +93,7 @@ def test_reassigning_a_role_speaks_to_every_new_agent(tmp_path):
                 },
             )
             after = client.get(
-                "/v1/messages", params={"recipient": agent_id, "after": 0}
+                "/v1/messages", params={"recipient": agent_id, "caller": agent_id, "after": 0}
             ).json()
             return after[len(before) :]
 
@@ -178,7 +178,7 @@ def test_hq_reaches_every_convened_lead_without_picking_anyone(tmp_path):
 
         def inbox(agent_id):
             return client.get(
-                "/v1/messages", params={"recipient": agent_id, "after": 0}
+                "/v1/messages", params={"recipient": agent_id, "caller": agent_id, "after": 0}
             ).json()
 
         assert [m["body"] for m in inbox("lead-a")] == ["로드맵"]

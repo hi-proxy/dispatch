@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sqlite3
 import tempfile
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 
 from .db import FungisDB
 from .schemas import (
@@ -24,7 +26,7 @@ from .schemas import (
     BoardNodeCreate, BoardNodeUpdate, BoardEdge,
 )
 
-# lead 지정·해제 안내. 문구는 docs/HANDOFF.md에서 합의된 그대로다.
+# lead 지정·해제 안내. 문구는 fungis-docs 의 HANDOFF.md 에서 합의된 그대로다.
 # <project>는 에이전트가 읽는 자리 표시라 채우지 않는다. 프로젝트 이름
 # 자리만 실제 이름으로 바뀐다.
 LEAD_APPOINTED_TEMPLATE = """너는 {project} 프로젝트의 lead 로 선택되었다.
@@ -92,33 +94,53 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     app.state.db = db
     app.state.hub = hub
 
+    # 같은 조건이 409 도 되고 404 도 되던 것을 여기서 한 번에 정한다. 예전에는
+    # 엔드포인트마다 try/except 를 손으로 베꼈고, 40여 벌을 베끼는 동안 어긋났다 —
+    # update_project 는 없는 프로젝트에 409, 바로 아래 archive_project 는 404 였다.
+    #
+    # 그리고 `except Exception -> 409, detail=str(error)` 는 sqlite 오류와 프로그래밍
+    # 버그까지 클라이언트 본문으로 흘렸다. 이제 아는 뜻만 옮기고 나머지는 500 으로
+    # 둔다 — 모르는 것을 아는 척하지 않는다.
+    @app.exception_handler(LookupError)
+    async def _not_found(_: Request, error: LookupError) -> Response:
+        return JSONResponse(status_code=404, content={"detail": str(error)})
+
+    @app.exception_handler(ValueError)
+    async def _conflict(_: Request, error: ValueError) -> Response:
+        return JSONResponse(status_code=409, content={"detail": str(error)})
+
+    @app.exception_handler(PermissionError)
+    async def _forbidden(_: Request, error: PermissionError) -> Response:
+        return JSONResponse(status_code=403, content={"detail": str(error)})
+
+    # 제약 위반은 프로그래밍 버그가 아니라 진짜 충돌이다 — 이미 있는 것과
+    # 부딪혔다는 뜻이라 409 가 맞다. 여기서 걸러 두는 것이 값이 있다: 이제
+    # TypeError 나 AttributeError 는 409 로 위장하지 못하고 500 이 된다.
+    @app.exception_handler(sqlite3.IntegrityError)
+    async def _integrity(_: Request, error: sqlite3.IntegrityError) -> Response:
+        return JSONResponse(status_code=409, content={"detail": str(error)})
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.post("/v1/principals", status_code=201)
     def create_principal(payload: PrincipalCreate) -> dict:
-        try:
-            return db.create_principal(
-                kind=payload.kind,
-                display_name=payload.display_name,
-                principal_id=payload.id,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.create_principal(
+            kind=payload.kind,
+            display_name=payload.display_name,
+            principal_id=payload.id,
+        )
 
     @app.put("/v1/principals/{principal_id}")
     def upsert_principal(principal_id: str, payload: PrincipalCreate) -> dict:
         if payload.id is not None and payload.id != principal_id:
             raise HTTPException(status_code=400, detail="principal id mismatch")
-        try:
-            return db.upsert_principal(
-                principal_id=principal_id,
-                kind=payload.kind,
-                display_name=payload.display_name,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.upsert_principal(
+            principal_id=principal_id,
+            kind=payload.kind,
+            display_name=payload.display_name,
+        )
 
     @app.get("/v1/projects")
     def projects() -> list[dict]:
@@ -126,42 +148,25 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.post("/v1/projects", status_code=201)
     def create_project(payload: ProjectCreate) -> dict:
-        try:
-            return db.create_project(name=payload.name, project_id=payload.id)
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.create_project(name=payload.name, project_id=payload.id)
 
     @app.patch("/v1/projects/{project_id}")
     def update_project(project_id: str, payload: ProjectUpdate) -> dict:
-        try:
-            return db.update_project(project_id=project_id, name=payload.name)
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.update_project(project_id=project_id, name=payload.name)
 
     @app.delete("/v1/projects/{project_id}")
     def archive_project(project_id: str) -> dict:
-        try:
-            return db.archive_project(project_id=project_id)
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.archive_project(project_id=project_id)
 
     @app.get("/v1/pm-profiles/{principal_id}")
     def pm_profile(principal_id: str) -> dict:
-        try:
-            return db.pm_profile(principal_id)
-        except Exception as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.pm_profile(principal_id)
 
     @app.patch("/v1/pm-profiles/{principal_id}")
     def update_pm_profile(principal_id: str, payload: PMProfileUpdate) -> dict:
-        try:
-            return db.update_pm_profile(
-                principal_id=principal_id, display_name=payload.display_name
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.update_pm_profile(
+            principal_id=principal_id, display_name=payload.display_name
+        )
 
     @app.put("/v1/pm-profiles/{principal_id}/avatar")
     async def set_pm_avatar(principal_id: str, request: Request) -> dict:
@@ -171,12 +176,9 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         data = await request.body()
         if not data or len(data) > 2_000_000:
             raise HTTPException(status_code=413, detail="avatar must be 1 byte to 2 MB")
-        try:
-            return db.set_pm_avatar(
-                principal_id=principal_id, data=data, media_type=media_type
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.set_pm_avatar(
+            principal_id=principal_id, data=data, media_type=media_type
+        )
 
     @app.get("/v1/pm-profiles/{principal_id}/avatar")
     def pm_avatar(principal_id: str) -> Response:
@@ -188,10 +190,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.delete("/v1/pm-profiles/{principal_id}/avatar", status_code=204)
     def delete_pm_avatar(principal_id: str) -> None:
-        try:
-            db.set_pm_avatar(principal_id=principal_id, data=None, media_type=None)
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        db.set_pm_avatar(principal_id=principal_id, data=None, media_type=None)
 
     @app.put("/v1/nodes/{node_id}")
     def upsert_node(node_id: str, payload: NodeUpsert) -> dict:
@@ -203,10 +202,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     def upsert_binding(agent_id: str, payload: BindingUpsert) -> dict:
         if agent_id != payload.agent_id:
             raise HTTPException(status_code=400, detail="agent id mismatch")
-        try:
-            return db.upsert_binding(payload.model_dump())
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.upsert_binding(payload.model_dump())
 
     @app.delete("/v1/bindings/{agent_id}", status_code=204)
     def detach_binding(agent_id: str) -> None:
@@ -250,16 +246,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     async def send_message(payload: MessageCreate) -> dict:
         # 남의 방에 글을 남길 수는 없다. 읽기 경계와 같은 판정을 쓴다 — HQ는
         # 소속이 아니라 lead 여부로 열리고, 그 규칙이 이미 여기 들어 있다.
-        if not db.workspace_participant(
-            workspace_id=payload.workspace_id, principal_id=payload.sender_id
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=db.participation_denied(
-                    workspace_id=payload.workspace_id,
-                    principal_id=payload.sender_id,
-                ),
-            )
+        guard_participant(payload.workspace_id, payload.sender_id)
         in_reply_to = payload.in_reply_to
         if payload.in_reply_to_project_seq is not None:
             if in_reply_to is not None:
@@ -276,24 +263,21 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
                     status_code=404,
                     detail=f"message {payload.in_reply_to_project_seq} not found in this project",
                 )
-        try:
-            message, events = db.send_message(
-                workspace_id=payload.workspace_id,
-                sender_id=payload.sender_id,
-                recipient_ids=payload.recipient_ids,
-                role_ids=payload.role_ids,
-                reference_ids=payload.reference_ids,
-                body=payload.body,
-                message_id=payload.id,
-                kind=payload.kind,
-                reply_level=payload.reply_level,
-                in_reply_to=in_reply_to,
-                track=payload.track,
-                tags=payload.tags,
-                inherit_context=payload.inherit_context,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        message, events = db.send_message(
+            workspace_id=payload.workspace_id,
+            sender_id=payload.sender_id,
+            recipient_ids=payload.recipient_ids,
+            role_ids=payload.role_ids,
+            reference_ids=payload.reference_ids,
+            body=payload.body,
+            message_id=payload.id,
+            kind=payload.kind,
+            reply_level=payload.reply_level,
+            in_reply_to=in_reply_to,
+            track=payload.track,
+            tags=payload.tags,
+            inherit_context=payload.inherit_context,
+        )
         for event in events:
             await hub.publish(event)
         return message
@@ -304,25 +288,19 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.post("/v1/workspaces/{workspace_id}/roles", status_code=201)
     def create_role(workspace_id: str, payload: RoleCreate) -> dict:
-        try:
-            return db.create_role(
-                workspace_id=workspace_id,
-                name=payload.name,
-                onboarding_prompt=payload.onboarding_prompt,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.create_role(
+            workspace_id=workspace_id,
+            name=payload.name,
+            onboarding_prompt=payload.onboarding_prompt,
+        )
 
     @app.patch("/v1/roles/{role_id}")
     def update_role(role_id: str, payload: RoleUpdate) -> dict:
-        try:
-            return db.update_role(
-                role_id=role_id,
-                name=payload.name,
-                onboarding_prompt=payload.onboarding_prompt,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.update_role(
+            role_id=role_id,
+            name=payload.name,
+            onboarding_prompt=payload.onboarding_prompt,
+        )
 
     @app.delete("/v1/roles/{role_id}", status_code=204)
     def delete_role(role_id: str) -> None:
@@ -331,8 +309,6 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
                 raise HTTPException(status_code=404, detail="role not found")
         except HTTPException:
             raise
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.put("/v1/roles/{role_id}/avatar")
     async def set_role_avatar(role_id: str, request: Request) -> dict:
@@ -342,10 +318,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         data = await request.body()
         if not data or len(data) > 2_000_000:
             raise HTTPException(status_code=413, detail="avatar must be 1 byte to 2 MB")
-        try:
-            return db.set_role_avatar(role_id=role_id, data=data, media_type=media_type)
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.set_role_avatar(role_id=role_id, data=data, media_type=media_type)
 
     @app.get("/v1/roles/{role_id}/avatar")
     def role_avatar(role_id: str) -> Response:
@@ -357,50 +330,44 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.delete("/v1/roles/{role_id}/avatar", status_code=204)
     def delete_role_avatar(role_id: str) -> None:
-        try:
-            db.set_role_avatar(role_id=role_id, data=None, media_type=None)
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        db.set_role_avatar(role_id=role_id, data=None, media_type=None)
 
     @app.put("/v1/roles/{role_id}/assignment")
     async def assign_role(role_id: str, payload: RoleAssignmentUpsert) -> dict:
-        try:
-            current = db.role(role_id)
-            prompt = current["onboarding_prompt"]
-            is_new_assignment = current.get("agent_id") != payload.agent_id
-            role, events = db.assign_role(
-                role_id=role_id,
-                agent_id=payload.agent_id,
-                assigned_by=payload.assigned_by,
-                onboarding_sent=payload.send_onboarding and is_new_assignment,
+        current = db.role(role_id)
+        prompt = current["onboarding_prompt"]
+        is_new_assignment = current.get("agent_id") != payload.agent_id
+        role, events = db.assign_role(
+            role_id=role_id,
+            agent_id=payload.agent_id,
+            assigned_by=payload.assigned_by,
+            onboarding_sent=payload.send_onboarding and is_new_assignment,
+        )
+        if payload.send_onboarding and is_new_assignment:
+            # 역할 설명이 비어 있어도 보낸다. 안 보내면 에이전트는 자기가
+            # 배정된 줄도 모르고, PM은 앱에서 보냈다고 믿는다.
+            #
+            # 호출문에 프로젝트 ID를 늘 싣는다. 이게 없으면 에이전트는
+            # 배정된 건 아는데 자기 방 번호를 몰라 fungis init을 못 하고
+            # PM에게 되묻는다.
+            lines = [
+                "[fungis:init] 사용법과 현재 역할 구성을 불러오세요: "
+                f"fungis init --project {role['workspace_id']}"
+            ]
+            if prompt:
+                lines.append(prompt)
+            _, onboarding_events = db.send_message(
+                workspace_id=role["workspace_id"],
+                sender_id=payload.assigned_by,
+                recipient_ids=[payload.agent_id],
+                role_ids=[],
+                body="\n\n".join(lines),
+                tags=["onboarding"],
             )
-            if payload.send_onboarding and is_new_assignment:
-                # 역할 설명이 비어 있어도 보낸다. 안 보내면 에이전트는 자기가
-                # 배정된 줄도 모르고, PM은 앱에서 보냈다고 믿는다.
-                #
-                # 호출문에 프로젝트 ID를 늘 싣는다. 이게 없으면 에이전트는
-                # 배정된 건 아는데 자기 방 번호를 몰라 fungis init을 못 하고
-                # PM에게 되묻는다.
-                lines = [
-                    "[fungis:init] 사용법과 현재 역할 구성을 불러오세요: "
-                    f"fungis init --project {role['workspace_id']}"
-                ]
-                if prompt:
-                    lines.append(prompt)
-                _, onboarding_events = db.send_message(
-                    workspace_id=role["workspace_id"],
-                    sender_id=payload.assigned_by,
-                    recipient_ids=[payload.agent_id],
-                    role_ids=[],
-                    body="\n\n".join(lines),
-                    tags=["onboarding"],
-                )
-                events.extend(onboarding_events)
-            for event in events:
-                await hub.publish(event)
-            return role
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+            events.extend(onboarding_events)
+        for event in events:
+            await hub.publish(event)
+        return role
 
     @app.delete("/v1/roles/{role_id}/assignment", status_code=204)
     def unassign_role(role_id: str) -> None:
@@ -428,8 +395,6 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     def connect_project(project_id: str, payload: BoardLink) -> dict:
         try:
             return db.connect_project(project_id=project_id, hq_id=payload.hq_id)
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -447,10 +412,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.put("/v1/roles/{role_id}/lead")
     def set_role_lead(role_id: str, payload: RoleLead) -> dict:
-        try:
-            return db.set_role_lead(role_id=role_id, is_lead=payload.is_lead)
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.set_role_lead(role_id=role_id, is_lead=payload.is_lead)
 
     @app.post("/v1/lead-announcements/flush")
     async def flush_lead_announcements(payload: LeadAnnouncementFlush) -> dict:
@@ -504,6 +466,29 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         # 보드는 누구나 읽는다. 대화와 달리 상태는 가릴 것이 아니다.
         return db.board()
 
+    def guard_participant(workspace_id: str, caller: str) -> None:
+        """그 방 내용을 줘도 되는 사람인가.
+
+        방 열람은 필터가 아니라 경계다. 그런데 판정을 부르는 것이 엔드포인트마다
+        손으로 편 네 줄이라, 새 읽기를 얹는 쪽이 매번 잊었다 — attention ·
+        bookmarks · timeline_pins · shared · work · messages 여섯이 검사 없이
+        방 내용을 돌려주고 있었다(pm_request 본문 포함).
+
+        헬퍼 하나로 모으는 것이 이 함수의 값이다. **부르는 자리가 곧 경계
+        감사 목록이 된다** — 방 내용을 주면서 이걸 안 부르는 곳이 있으면
+        grep 한 번에 드러난다.
+        """
+        if db.workspace_participant(
+            workspace_id=workspace_id, principal_id=caller
+        ):
+            return
+        raise HTTPException(
+            status_code=403,
+            detail=db.participation_denied(
+                workspace_id=workspace_id, principal_id=caller
+            ),
+        )
+
     def guard_board_write(project_id: str, actor_id: str) -> None:
         """보드 쓰기는 그 방 lead 와 PM 의 몫이다. 읽기는 그대로 열려 있다."""
         denied = db.board_write_denied(project_id=project_id, actor_id=actor_id)
@@ -519,23 +504,17 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     @app.post("/v1/board/nodes", status_code=201)
     def create_board_node(payload: BoardNodeCreate) -> dict:
         guard_board_write(payload.project_id, payload.created_by)
-        try:
-            return db.create_board_node(
-                project_id=payload.project_id, title=payload.title,
-                created_by=payload.created_by, status=payload.status,
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.create_board_node(
+            project_id=payload.project_id, title=payload.title,
+            created_by=payload.created_by, status=payload.status,
+        )
 
     @app.patch("/v1/board/nodes/{node_id}")
     def update_board_node(node_id: str, payload: BoardNodeUpdate) -> dict:
         guard_board_node_write(node_id, payload.actor)
-        try:
-            return db.update_board_node(
-                node_id, title=payload.title, status=payload.status
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.update_board_node(
+            node_id, title=payload.title, status=payload.status
+        )
 
     @app.delete("/v1/board/nodes/{node_id}", status_code=204)
     def delete_board_node(node_id: str, actor: str = Query(min_length=1)) -> None:
@@ -553,8 +532,6 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
                 node_id=payload.node_id, waits_for=payload.waits_for,
                 created_by=payload.created_by,
             )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         return {"node_id": payload.node_id, "waits_for": payload.waits_for}
@@ -574,17 +551,27 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         agent_id: str = Query(min_length=1),
         pm_id: str = Query(min_length=1),
     ) -> dict:
-        try:
-            return db.project_bootstrap(
-                project_id=project_id, agent_id=agent_id, pm_id=pm_id
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.project_bootstrap(
+            project_id=project_id, agent_id=agent_id, pm_id=pm_id
+        )
 
     @app.get("/v1/messages")
     def messages(
-        recipient: str = Query(min_length=1), after: int = Query(default=0, ge=0)
+        recipient: str = Query(min_length=1),
+        caller: str = Query(min_length=1),
+        after: int = Query(default=0, ge=0),
     ) -> list[dict]:
+        # 인박스는 방이 아니라 사람에게 달린 것이라 guard_participant 가 아니다.
+        # 여기서 막는 것은 남의 인박스를 이름만 대고 여는 것이다.
+        #
+        # 신원이 자기 신고라 작정하면 우회된다. 그래도 값이 있다 — 노드가 잘못된
+        # recipient 로 부르는 실수가 여기서 걸린다. caller 는 자기 바인딩에서
+        # 오고 recipient 는 호출 인자라, 둘이 어긋나면 그건 버그다.
+        if caller != recipient:
+            raise HTTPException(
+                status_code=403,
+                detail="인박스는 그 사람만 읽는다. 남의 것을 이름으로 열 수 없다.",
+            )
         return db.messages_after(recipient_id=recipient, after=after)
 
     @app.get("/v1/timeline/{principal_id}")
@@ -607,15 +594,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         before: int | None = Query(default=None, gt=0),
     ) -> list[dict]:
         # caller를 선택으로 두면 안 싣는 쪽이 곧 우회로가 된다. 필수로 받는다.
-        if not db.workspace_participant(
-            workspace_id=workspace_id, principal_id=caller
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=db.participation_denied(
-                    workspace_id=workspace_id, principal_id=caller
-                ),
-            )
+        guard_participant(workspace_id, caller)
         if after is not None and before is not None:
             raise HTTPException(status_code=422, detail="after and before are mutually exclusive")
         if after_project_seq is not None:
@@ -638,15 +617,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     ) -> dict:
         # 글 하나도 열람 경계를 지난다. 한 개짜리 창구를 열어 두면 그것이 곧
         # 우회로가 된다.
-        if not db.workspace_participant(
-            workspace_id=workspace_id, principal_id=caller
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=db.participation_denied(
-                    workspace_id=workspace_id, principal_id=caller
-                ),
-            )
+        guard_participant(workspace_id, caller)
         message = db.workspace_message(
             workspace_id=workspace_id, project_seq=project_seq
         )
@@ -674,11 +645,17 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         return db.members(workspace_id)
 
     @app.get("/v1/workspaces/{workspace_id}/attention")
-    def workspace_attention(workspace_id: str) -> list[dict]:
+    def workspace_attention(
+        workspace_id: str, caller: str = Query(min_length=1)
+    ) -> list[dict]:
+        guard_participant(workspace_id, caller)
         return db.workspace_attention(workspace_id)
 
     @app.get("/v1/workspaces/{workspace_id}/bookmarks")
-    def bookmarks(workspace_id: str) -> list[dict]:
+    def bookmarks(
+        workspace_id: str, caller: str = Query(min_length=1)
+    ) -> list[dict]:
+        guard_participant(workspace_id, caller)
         return db.bookmarks(workspace_id)
 
     @app.post(
@@ -688,15 +665,10 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     def create_bookmark(
         workspace_id: str, message_seq: int, payload: BookmarkCreate
     ) -> dict:
-        try:
-            return db.create_bookmark(
-                workspace_id=workspace_id, message_seq=message_seq,
-                label=payload.label, created_by=payload.created_by,
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.create_bookmark(
+            workspace_id=workspace_id, message_seq=message_seq,
+            label=payload.label, created_by=payload.created_by,
+        )
 
     @app.delete(
         "/v1/workspaces/{workspace_id}/bookmarks/{bookmark_id}", status_code=204
@@ -708,7 +680,10 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="bookmark not found")
 
     @app.get("/v1/workspaces/{workspace_id}/timeline-pins")
-    def timeline_pins(workspace_id: str) -> list[dict]:
+    def timeline_pins(
+        workspace_id: str, caller: str = Query(min_length=1)
+    ) -> list[dict]:
+        guard_participant(workspace_id, caller)
         return db.timeline_pins(workspace_id)
 
     @app.post(
@@ -718,15 +693,10 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     def create_timeline_pin(
         workspace_id: str, message_seq: int, payload: TimelinePinCreate
     ) -> dict:
-        try:
-            return db.create_timeline_pin(
-                workspace_id=workspace_id, after_message_seq=message_seq,
-                label=payload.label, created_by=payload.created_by,
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.create_timeline_pin(
+            workspace_id=workspace_id, after_message_seq=message_seq,
+            label=payload.label, created_by=payload.created_by,
+        )
 
     @app.delete(
         "/v1/workspaces/{workspace_id}/timeline-pins/{pin_id}", status_code=204
@@ -737,8 +707,11 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/v1/shared/{workspace_id}")
     def shared_values(
-        workspace_id: str, keys: list[str] | None = Query(default=None)
+        workspace_id: str,
+        caller: str = Query(min_length=1),
+        keys: list[str] | None = Query(default=None),
     ) -> list[dict]:
+        guard_participant(workspace_id, caller)
         return db.shared_values(workspace_id=workspace_id, keys=keys)
 
     @app.put("/v1/shared/{workspace_id}/{key}")
@@ -748,15 +721,12 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         payload: SharedValueUpsert,
         updated_by: str = Query(min_length=1),
     ) -> dict:
-        try:
-            return db.upsert_shared_value(
-                workspace_id=workspace_id,
-                key=key,
-                value=payload.value,
-                updated_by=updated_by,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.upsert_shared_value(
+            workspace_id=workspace_id,
+            key=key,
+            value=payload.value,
+            updated_by=updated_by,
+        )
 
     @app.delete("/v1/shared/{workspace_id}/{key}", status_code=204)
     def delete_shared_value(workspace_id: str, key: str) -> None:
@@ -765,60 +735,48 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
 
     @app.post("/v1/work", status_code=201)
     def start_work(payload: WorkStart) -> dict:
-        try:
-            return db.start_work(
-                workspace_id=payload.workspace_id,
-                agent_id=payload.agent_id,
-                title=payload.title,
-            )
-        except Exception as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
+        return db.start_work(
+            workspace_id=payload.workspace_id,
+            agent_id=payload.agent_id,
+            title=payload.title,
+        )
 
     @app.post("/v1/work/{agent_id}/report")
     def report_work(agent_id: str, payload: WorkUpdate) -> dict:
-        try:
-            return db.update_active_work(
-                agent_id=agent_id, report=payload.report, done=False
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.update_active_work(
+            agent_id=agent_id, report=payload.report, done=False
+        )
 
     @app.post("/v1/work/{agent_id}/done")
     def finish_work(agent_id: str, payload: WorkUpdate) -> dict:
-        try:
-            return db.update_active_work(
-                agent_id=agent_id, report=payload.report, done=True
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.update_active_work(
+            agent_id=agent_id, report=payload.report, done=True
+        )
 
     @app.get("/v1/work/{workspace_id}")
     def work_items(
-        workspace_id: str, limit: int = Query(default=100, ge=1, le=500)
+        workspace_id: str,
+        caller: str = Query(min_length=1),
+        limit: int = Query(default=100, ge=1, le=500),
     ) -> list[dict]:
+        guard_participant(workspace_id, caller)
         return db.work_items(workspace_id=workspace_id, limit=limit)
 
     @app.post("/v1/inbox/ack-received")
     def ack_received(payload: AckRequest) -> dict:
-        try:
-            return db.ack(
-                recipient_id=payload.recipient_id,
-                through_seq=payload.through_seq,
-                processed=False,
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.ack(
+            recipient_id=payload.recipient_id,
+            through_seq=payload.through_seq,
+            processed=False,
+        )
 
     @app.post("/v1/inbox/ack-processed")
     def ack_processed(payload: AckRequest) -> dict:
-        try:
-            return db.ack(
-                recipient_id=payload.recipient_id,
-                through_seq=payload.through_seq,
-                processed=True,
-            )
-        except LookupError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
+        return db.ack(
+            recipient_id=payload.recipient_id,
+            through_seq=payload.through_seq,
+            processed=True,
+        )
 
     @app.get("/v1/inbox/state/{recipient_id}")
     def inbox_state(recipient_id: str) -> dict:
