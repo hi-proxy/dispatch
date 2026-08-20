@@ -44,7 +44,22 @@ final class AppModel: ObservableObject {
     @Published var isConnected = false
     @Published var errorMessage: String?
     @Published var isMutating = false
-    @Published var selectedProjectID = "local"
+    /// 마지막으로 보던 방. 기억하지 않으면 앱을 열 때마다 같은 자리로 가고,
+    /// 그 자리가 지워진 방이면 없는 방을 가리킨 채 뜬다.
+    ///
+    /// 처음이면 HQ 다. HQ 는 항상 있고 빈 HQ 안내가 무엇부터 할지 말해 준다 —
+    /// "아무 방도 아닌" 상태를 따로 만들면 타임라인·작성기·보드띠가 각각 그
+    /// 갈래를 하나씩 갖게 된다.
+    @Published var selectedProjectID = AppModel.lastRoom() {
+        didSet { UserDefaults.standard.set(selectedProjectID, forKey: AppModel.roomKey) }
+    }
+
+    static let homeRoom = "hq"
+    private static let roomKey = "selectedProjectID"
+
+    private static func lastRoom() -> String {
+        UserDefaults.standard.string(forKey: roomKey) ?? homeRoom
+    }
     @Published private(set) var isLoadingHistory = false
     @Published private(set) var hasOlderMessages = true
     /// 첫 snapshot이 아직 도착하지 않은 구간. 빈 타임라인을 "메시지 없음"으로
@@ -274,9 +289,10 @@ final class AppModel: ObservableObject {
         guard await mutate({ try await api.archiveProject(id: id) }) else { return }
         recipientMemory[id] = nil
         timelineCache[id] = nil
-        if selectedProjectID == id,
-           let next = snapshot.projects.first(where: { $0.id != id })?.id {
-            selectProject(next)
+        // 지운 방에 서 있었으면 HQ 로 간다. 남은 방 중 아무거나 고르면 남의
+        // 방에 떨어져 거기 대고 말하게 된다.
+        if selectedProjectID == id {
+            selectProject(Self.homeRoom)
         }
         await refresh()
     }
@@ -537,6 +553,18 @@ final class AppModel: ObservableObject {
         }
         snapshot = fresh
         isLoadingTimeline = false
+        // 고르고 있는 방이 목록에 없으면 HQ 로 간다.
+        //
+        // 기억해 둔 방이 그 사이 지워졌을 수 있다. 그대로 두면 헤더에는 이름이
+        // 보이는데 좌측 목록에서는 아무것도 안 골라져 있다 — 서버가 그 id 로도
+        // 스냅샷을 내주기 때문에 화면은 정상처럼 보인다.
+        //
+        // 아무 방이나 첫 번째를 고르지 않는다. 임의로 고르면 남의 방에 떨어져
+        // 거기 대고 말하게 된다. HQ 는 어느 방도 아니면서 항상 있다.
+        if !fresh.projects.contains(where: { $0.id == fresh.projectID }) {
+            selectProject(Self.homeRoom)
+            return
+        }
         if let seq = fresh.projects.first(where: { $0.id == fresh.projectID })?.lastMessageSeq {
             markRead(fresh.projectID, upTo: seq)
         }

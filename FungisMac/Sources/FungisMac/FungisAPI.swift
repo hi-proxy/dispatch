@@ -39,10 +39,14 @@ struct FungisAPI: Sendable {
     /// 방에 걸린 저장소 안의 파일 한 장. 비서가 짚어 준 자리를 보는 용도다.
     /// 그리는 것은 앱이므로 토큰이 들지 않는다 — 코드를 메시지에 베끼지 않게
     /// 하려고 있는 길이다.
-    func file(projectID: String, path: String) async throws -> RepositoryFile {
-        try await request(
-            "api/projects/\(encoded(projectID))/file?path=\(encoded(path))"
-        )
+    /// `ref` 를 주면 그 커밋의 파일을 읽는다. 안 주면 그 방이 지금 열고 있는
+    /// 작업 트리다.
+    func file(
+        projectID: String, path: String, ref: String? = nil
+    ) async throws -> RepositoryFile {
+        var query = "path=\(encoded(path))"
+        if let ref { query += "&ref=\(encoded(ref))" }
+        return try await request("api/projects/\(encoded(projectID))/file?\(query)")
     }
 
     // MARK: 상황보드

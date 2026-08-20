@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import signal
+import subprocess
 import threading
 import time
 from contextlib import contextmanager
@@ -66,13 +68,23 @@ def source_fingerprint(roots: Iterable[Path]) -> tuple | None:
 # 파일 전체를 다 보내지 않는다. 넘으면 잘라서 보내고 잘렸다고 말한다.
 FILE_VIEW_MAX_LINES = 4000
 
+# 참조가 실어 온 커밋. git 인자로 들어가므로 옵션으로 먹힐 수 있는 모양을
+# 여기서 막는다 — `-`로 시작하는 것과 낯선 글자를 통째로 거절한다.
+COMMIT_REF = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._/-]{0,63}$")
 
-def read_repository_file(repo_root: str, relative: str) -> dict[str, object]:
+
+def read_repository_file(
+    repo_root: str, relative: str, ref: str | None = None
+) -> dict[str, object]:
     """저장소 안의 파일 한 장을 읽는다.
 
     비서가 `fungis_node/inbox.py:68` 이라고 짚어 주면 PM 이 눌러서 그 줄을 본다.
     앱이 그리는 것이므로 토큰이 들지 않는다 — 코드를 메시지 본문에 베껴 넣는
     대신 여기를 쓴다.
+
+    `ref` 를 주면 그 커밋의 파일을 읽는다. 짚은 쪽과 보는 쪽이 다른 브랜치를
+    열고 있으면 같은 줄 번호가 다른 코드를 가리키므로, 커밋을 실은 참조는
+    작업 트리가 아니라 그 커밋을 봐야 뜻이 맞는다.
 
     **저장소 밖으로 못 나간다.** 받은 경로를 풀어서 뿌리 안에 있는지 확인한다.
     `../` 도, 심볼릭 링크도 여기서 걸린다. 이건 신뢰 경계라 줄이지 않는다.
@@ -81,6 +93,8 @@ def read_repository_file(repo_root: str, relative: str) -> dict[str, object]:
     target = (root / relative).resolve()
     if not target.is_relative_to(root):
         raise PermissionError(f"path escapes the repository: {relative}")
+    if ref is not None:
+        return read_file_at_commit(root, str(target.relative_to(root)), ref)
     if not target.is_file():
         raise FileNotFoundError(f"not a file: {relative}")
     text = target.read_text(encoding="utf-8", errors="replace")
@@ -99,6 +113,50 @@ def read_repository_file(repo_root: str, relative: str) -> dict[str, object]:
         # 커밋 안 한 변경이 있으면 이 줄이 그 커밋의 줄이라는 보장이 없다.
         "dirty": bool(git.get("dirty")),
     }
+
+
+def read_file_at_commit(root: Path, inside: str, ref: str) -> dict[str, object]:
+    """그 커밋의 파일 한 장. 작업 트리는 안 본다."""
+    if not COMMIT_REF.match(ref):
+        raise PermissionError(f"not a commit: {ref}")
+    try:
+        shown = subprocess.run(
+            ["git", "-C", str(root), "show", f"{ref}:{inside}"],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise FileNotFoundError(f"cannot read {inside} at {ref}") from error
+    if shown.returncode != 0:
+        raise FileNotFoundError(f"not in {ref}: {inside}")
+    lines = shown.stdout.decode("utf-8", errors="replace").splitlines()
+    return {
+        "path": inside,
+        "lines": lines[:FILE_VIEW_MAX_LINES],
+        "total_lines": len(lines),
+        "truncated": len(lines) > FILE_VIEW_MAX_LINES,
+        # 커밋으로 읽었으므로 브랜치는 뜻이 없다. 그 커밋이 여러 브랜치에
+        # 얹혀 있을 수 있어서 하나를 골라 말하면 거짓이 된다.
+        "branch": None,
+        "head": resolve_commit(root, ref) or ref,
+        # 커밋된 내용이라 작업 트리가 더러워도 이 줄과는 무관하다.
+        "dirty": False,
+    }
+
+
+def resolve_commit(root: Path, ref: str) -> str | None:
+    try:
+        found = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--short=12", ref],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return found.stdout.strip() if found.returncode == 0 else None
 
 
 def gate_age_seconds(registry_path: Path) -> float | None:
@@ -753,7 +811,11 @@ def create_web_app(
             )
 
     @app.get("/api/projects/{project_id}/file")
-    def project_file(project_id: str, path: str = Query(min_length=1)) -> dict:
+    def project_file(
+        project_id: str,
+        path: str = Query(min_length=1),
+        ref: str | None = Query(default=None),
+    ) -> dict:
         registry = LocalRegistry(registry_path)
         try:
             repository = registry.project_repository(project_id)
@@ -764,7 +826,7 @@ def create_web_app(
                 status_code=404, detail="this room has no repository"
             )
         try:
-            return read_repository_file(repository["path"], path)
+            return read_repository_file(repository["path"], path, ref)
         except PermissionError as error:
             raise HTTPException(status_code=403, detail=str(error)) from error
         except FileNotFoundError as error:

@@ -50,10 +50,14 @@ struct FungisProject: Decodable, Identifiable, Hashable {
     /// 하나가 없다고 스냅샷 전체가 안 읽히고 앱이 빈 화면이 된다.
     var kind: String?
     var isHQ: Bool { kind == "hq" }
+    /// 티켓 이름의 앞부분(ARCH). 코드 참조의 `{{ARCH}}` 뿌리가 이것으로 방을
+    /// 찾는다. 서버가 낡으면 안 온다.
+    var ticketPrefix: String?
     enum CodingKeys: String, CodingKey {
         case id, name, kind
         case createdAt = "created_at"
         case lastMessageSeq = "last_message_seq"
+        case ticketPrefix = "ticket_prefix"
     }
 }
 
@@ -551,16 +555,34 @@ struct RepositoryFile: Decodable {
     }
 }
 
-/// 메시지 본문에서 찾아낸 코드 자리. `path:12` 도 `path:12-40` 도 받는다.
+/// 메시지 본문에서 찾아낸 코드 자리.
+///
+/// ```
+/// path.py:12                  보고 있는 방, 그 방이 열고 있는 브랜치
+/// path.py:12-40               여러 줄
+/// {{ARCH}}/path.dart:12       다른 방의 저장소
+/// {{ARCH}}/path.dart@a1b2c3:12  그 방의 그 커밋
+/// ```
 struct CodeReference: Hashable, Identifiable {
+    /// 어느 방의 저장소인가. nil 이면 보고 있는 방이다.
+    let prefix: String?
     let path: String
+    /// 어느 커밋의 줄인가. nil 이면 그 방이 지금 열고 있는 작업 트리다.
+    ///
+    /// 짚은 쪽과 보는 쪽이 다른 브랜치를 열고 있으면 같은 줄 번호가 다른
+    /// 코드를 가리킨다. 커밋을 실으면 그 창이 닫힌다.
+    let commit: String?
     let firstLine: Int
     let lastLine: Int
 
-    var id: String { "\(path):\(firstLine)-\(lastLine)" }
+    var id: String {
+        "\(prefix ?? "")|\(path)|\(commit ?? "")|\(firstLine)-\(lastLine)"
+    }
     var label: String {
-        firstLine == lastLine ? "\(path):\(firstLine)"
-                              : "\(path):\(firstLine)-\(lastLine)"
+        let lines = firstLine == lastLine ? "\(firstLine)" : "\(firstLine)-\(lastLine)"
+        // 커밋은 단추에 안 적는다 — 열면 헤더에 나오고, 캡슐 한 줄에 다
+        // 넣으면 정작 파일 이름이 잘린다.
+        return prefix.map { "\($0) \(path):\(lines)" } ?? "\(path):\(lines)"
     }
 
     /// 본문에서 코드 자리를 뽑는다. 비서에게 코드를 인용하지 말고 이 형식으로
@@ -569,19 +591,22 @@ struct CodeReference: Hashable, Identifiable {
     /// 확장자를 요구한다. 안 그러면 `fungis reply 42` 나 `#397:1` 같은 것이
     /// 전부 파일로 잡힌다.
     static func found(in body: String) -> [CodeReference] {
-        let pattern = #"([\w./-]+\.[A-Za-z]{1,10}):(\d+)(?:-(\d+))?"#
+        let pattern = #"(?:\{\{([A-Za-z0-9]{1,8})\}\}/)?"#
+            + #"([\w./-]+\.[A-Za-z]{1,10})"#
+            + #"(?:@([0-9a-fA-F]{7,40}))?:(\d+)(?:-(\d+))?"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
         let range = NSRange(body.startIndex..., in: body)
         var found: [CodeReference] = []
         for match in regex.matches(in: body, range: range) {
-            guard let path = Range(match.range(at: 1), in: body).map({ String(body[$0]) }),
-                  let firstText = Range(match.range(at: 2), in: body).map({ String(body[$0]) }),
-                  let first = Int(firstText)
+            func text(_ index: Int) -> String? {
+                Range(match.range(at: index), in: body).map { String(body[$0]) }
+            }
+            guard let path = text(2), let first = text(4).flatMap(Int.init)
             else { continue }
-            let lastText = Range(match.range(at: 3), in: body).map { String(body[$0]) }
-            let last = lastText.flatMap(Int.init) ?? first
+            let last = text(5).flatMap(Int.init) ?? first
             let reference = CodeReference(
-                path: path, firstLine: first, lastLine: max(first, last)
+                prefix: text(1), path: path, commit: text(3),
+                firstLine: first, lastLine: max(first, last)
             )
             if !found.contains(reference) { found.append(reference) }
         }

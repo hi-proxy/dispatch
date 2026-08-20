@@ -34,10 +34,81 @@ enum MessagePrettyPrinter {
         return result
     }
 
-    static func prettyText(_ source: String, seed: Int) -> AttributedString {
-        let formatted = format(source)
+    /// 형광펜과 인라인 코드까지 입힌 한 덩이. 블록 안쪽을 그릴 때 쓴다.
+    ///
+    /// 머리표 줄바꿈(`format`)은 여기서 안 돈다 — 표 칸이나 코드블록 안에서도
+    /// 돌면 원문이 바뀐다. 그것이 필요한 문단에서만 미리 돌려 넘긴다.
+    static func inlineText(_ source: String, seed: Int) -> AttributedString {
         var result = AttributedString()
-        var cursor = formatted.startIndex
+        for piece in splitInlineCode(source) {
+            switch piece {
+            case let .plain(text):
+                result.append(highlighted(text, seed: seed))
+            case let .code(text):
+                var styled = AttributedString(text)
+                styled.font = .system(.body, design: .monospaced)
+                // 파란 말풍선 위에서도 띠가 보여야 한다. 0.18 은 거기서 묻혔다.
+                styled.backgroundColor = Color.secondary.opacity(0.28)
+                result.append(styled)
+            }
+        }
+        return result
+    }
+
+    private enum InlinePiece {
+        case plain(String)
+        case code(String)
+    }
+
+    /// `` `이런 것` `` 을 떼어낸다. 닫는 백틱이 없으면 글자 그대로 둔다.
+    private static func splitInlineCode(_ source: String) -> [InlinePiece] {
+        var pieces: [InlinePiece] = []
+        var cursor = source.startIndex
+        while let opening = source.range(of: "`", range: cursor..<source.endIndex) {
+            guard let closing = source.range(
+                of: "`", range: opening.upperBound..<source.endIndex
+            ) else { break }
+            let inner = String(source[opening.upperBound..<closing.lowerBound])
+            // 빈 백틱 쌍은 코드가 아니다. 지우면 원문에 없던 일이 된다.
+            if inner.isEmpty {
+                cursor = opening.lowerBound
+                break
+            }
+            pieces.append(.plain(String(source[cursor..<opening.lowerBound])))
+            pieces.append(.code(inner))
+            cursor = closing.upperBound
+        }
+        pieces.append(.plain(String(source[cursor...])))
+        return pieces
+    }
+
+    /// 문단 한 덩이. 머리표 줄바꿈까지 돌린다.
+    static func prettyText(_ source: String, seed: Int) -> AttributedString {
+        inlineText(format(source), seed: seed)
+    }
+
+    /// 메시지 맨 앞의 `[역할이름]`. 없으면 nil.
+    ///
+    /// 에이전트들이 본문 첫머리에 자기 이름을 적는 습관이 있다. 화면에는 이미
+    /// 발신자 이름과 역할이 나오므로 PM 에게는 없는 것이나 같은 정보다 —
+    /// 지우지는 않고(자기들끼리 쓰는 것으로 보인다) 색만 낮춰 뒤로 물린다.
+    static func leadingLabel(of text: String) -> String? {
+        guard text.hasPrefix("["), let close = text.firstIndex(of: "]") else {
+            return nil
+        }
+        let after = text.index(after: close)
+        // `[글](주소)` 는 링크다. 링크 앞머리를 라벨로 잡으면 안 된다.
+        if after < text.endIndex, text[after] == "(" { return nil }
+        let label = text[text.startIndex...close]
+        // 줄을 넘긴 대괄호는 이름이 아니다. 긴 것도 마찬가지다.
+        guard !label.contains("\n"), label.count <= 24 else { return nil }
+        return String(label)
+    }
+
+    /// `**...**` 를 형광펜으로. 표준 마크다운이면 굵게지만 여기서는 형광펜이다.
+    private static func highlighted(_ formatted: String, seed: Int) -> AttributedString {
+        var result = AttributedString()
+        var cursor: String.Index = formatted.startIndex
         var highlightIndex = 0
 
         while let opening = formatted.range(of: "**", range: cursor..<formatted.endIndex) {

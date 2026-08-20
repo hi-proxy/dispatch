@@ -502,6 +502,73 @@ def test_a_file_says_which_branch_it_came_from(tmp_path):
     assert read_repository_file(str(repo), "a.py")["dirty"] is True
 
 
+def test_a_commit_carrying_reference_reads_that_commit(tmp_path):
+    """짚은 쪽과 보는 쪽이 다른 브랜치를 열고 있으면 같은 줄이 다른 코드다.
+
+    커밋을 실은 참조는 작업 트리가 아니라 그 커밋을 봐야 뜻이 맞는다.
+    """
+    import subprocess
+
+    from fungis_node.web import read_repository_file
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=repo, check=True, text=True,
+            capture_output=True,
+        ).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (repo / "a.py").write_text("옛 줄\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "first")
+    first = git("rev-parse", "HEAD")
+
+    (repo / "a.py").write_text("새 줄\n")
+    git("commit", "-q", "-a", "-m", "second")
+
+    assert read_repository_file(str(repo), "a.py")["lines"] == ["새 줄"]
+
+    at_first = read_repository_file(str(repo), "a.py", first[:8])
+    assert at_first["lines"] == ["옛 줄"]
+    # 그 커밋이 여러 브랜치에 얹혀 있을 수 있어서 하나를 골라 말하면 거짓이다.
+    assert at_first["branch"] is None
+    assert at_first["head"] and first.startswith(at_first["head"])
+    # 커밋된 내용이라 작업 트리가 더러워도 이 줄과는 무관하다.
+    (repo / "a.py").write_text("건드림\n")
+    assert read_repository_file(str(repo), "a.py", first[:8])["dirty"] is False
+
+    # 없는 파일과 없는 커밋은 열리지 않는다.
+    for path, ref in (("a.py", "0" * 40), ("없다.py", first[:8])):
+        try:
+            read_repository_file(str(repo), path, ref)
+        except FileNotFoundError:
+            pass
+        else:
+            raise AssertionError(f"열리면 안 된다: {path}@{ref}")
+
+
+def test_a_commit_that_could_be_a_git_option_is_refused(tmp_path):
+    """ref 는 git 인자로 들어간다. 옵션으로 먹힐 모양은 여기서 막는다."""
+    from fungis_node.web import read_repository_file
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("one\n")
+
+    for bad in ("--upload-pack=x", "-x", "a b", "a;rm -rf /", "a$(x)"):
+        try:
+            read_repository_file(str(repo), "a.py", bad)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError(f"커밋이 아닌 것이 통과했다: {bad}")
+
+
 def test_a_file_outside_git_still_opens(tmp_path):
     """저장소가 아니어도 파일은 보여준다. 브랜치만 없다고 말한다."""
     from fungis_node.web import read_repository_file

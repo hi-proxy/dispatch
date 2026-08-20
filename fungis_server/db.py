@@ -413,9 +413,16 @@ class FungisDB:
             """CREATE UNIQUE INDEX IF NOT EXISTS one_live_hq
                ON projects(kind) WHERE kind = 'hq' AND archived_at IS NULL"""
         )
-        self._connection.execute(
-            "INSERT OR IGNORE INTO projects(id, name) VALUES ('local', 'Local')"
-        )
+        # INSERT OR IGNORE 는 보관 처리를 못 본다. 그래서 이 방을 지워도 다음
+        # 부팅 때 살아 돌아왔다 — 앱은 시작 선택이 'local' 이라 없어진 방을
+        # 가리킨 채 뜨고, 헤더에는 이름이 보이는데 좌측 목록에서는 아무것도
+        # 안 골라져 있었다. 한 번도 없었을 때만 만든다.
+        if self._connection.execute(
+            "SELECT 1 FROM projects WHERE id = 'local'"
+        ).fetchone() is None:
+            self._connection.execute(
+                "INSERT INTO projects(id, name) VALUES ('local', 'Local')"
+            )
         # HQ는 만드는 것이 아니라 있는 것이다. 만들게 하면 "아직 없음" 상태가
         # 생기고, 그 상태를 화면과 API가 각각 다뤄야 한다. 처음부터 두면
         # 그 갈래가 통째로 사라진다.
@@ -1688,6 +1695,10 @@ class FungisDB:
                 # 긴 걸음을 시작하기 전에 이걸 걸어야 한다. 안 걸면 착수만
                 # 선언하고 턴이 끝난 뒤 아무도 말을 걸 때까지 선다.
                 "wake_later": "fungis wake --in 20m",
+                # 명령이 아니라 본문에 쓰는 형식이다. 여기 말고는 에이전트가
+                # 이것을 배울 자리가 없다. 코드를 베껴 넣는 대신 자리를 짚으면
+                # 앱이 그려 주므로 토큰이 안 든다.
+                "code_spot": "{{ROOM}}/path/file.py@COMMIT:33-35",
                 "work_start": 'fungis work start "..."',
                 "work_report": 'fungis work report "..."',
                 "work_done": 'fungis work done "..."',

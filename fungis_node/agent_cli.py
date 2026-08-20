@@ -438,6 +438,11 @@ def format_bootstrap(value: dict) -> str:
             # 때까지 선다. 옛 서버는 이 칸이 없으므로 기본값을 둔다.
             "- book your next step before a long one: "
             + usage.get("wake_later", "fungis wake --in 20m"),
+            # 코드를 본문에 베껴 넣으면 토큰이 든다. 자리만 짚으면 앱이 그린다.
+            # ROOM 은 방 프리픽스(fungis rooms)고, 없으면 읽는 사람이 보고 있는
+            # 방이다. 커밋을 실으면 다른 브랜치에서도 같은 줄을 가리킨다.
+            "- point at code instead of pasting it: "
+            + usage.get("code_spot", "{{ROOM}}/path/file.py@COMMIT:33-35"),
             # 보드에 올리는 것은 그 방의 몫이다. 안 알려주면 PM이 대신 쳐 넣게
             # 되고, 그러면 보드는 PM이 이미 아는 것만 담는다.
             '- board: fungis board / fungis board add "..." / '

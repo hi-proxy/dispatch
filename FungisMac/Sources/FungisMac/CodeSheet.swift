@@ -72,7 +72,13 @@ struct CodeSheet: View {
                 Label(branch, systemImage: "arrow.triangle.branch")
             }
             if let head = file.head {
-                Text(head).monospaced()
+                // 커밋을 실은 참조는 브랜치가 안 온다. 자물쇠가 "이건 움직이는
+                // 트리가 아니라 그 커밋" 이라고 말한다.
+                if reference.commit != nil {
+                    Label(head, systemImage: "lock").monospaced()
+                } else {
+                    Text(head).monospaced()
+                }
             }
             if file.dirty == true {
                 // 커밋 안 한 변경이 있으면 이 줄이 그 커밋의 줄이 아닐 수 있다.
@@ -103,10 +109,26 @@ struct CodeSheet: View {
         .id(number)
     }
 
+    /// 어느 방의 저장소를 열 것인가. `{{ARCH}}` 뿌리가 붙어 있으면 그 방이고,
+    /// 없으면 보고 있는 방이다.
+    ///
+    /// 뿌리가 없으면 남의 방 코드를 짚을 길이 없다 — 비서는 자기 방에 저장소가
+    /// 없어서 어느 방의 코드도 못 가리킨다.
+    private var targetProjectID: String? {
+        guard let prefix = reference.prefix else { return projectID }
+        return model.snapshot.projects.first {
+            $0.ticketPrefix?.caseInsensitiveCompare(prefix) == .orderedSame
+        }?.id
+    }
+
     private func load() async {
+        guard let target = targetProjectID else {
+            failure = "{{\(reference.prefix ?? "")}} 라는 방이 없다"
+            return
+        }
         do {
             let seen = try await model.api.file(
-                projectID: projectID, path: reference.path
+                projectID: target, path: reference.path, ref: reference.commit
             )
             painted = CodeHighlighter.paint(lines: seen.lines, path: seen.path)
             file = seen

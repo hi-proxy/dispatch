@@ -1202,18 +1202,29 @@ private struct MessageRow: View {
                                 .contentShape(Rectangle())
                         }
                     } else if showPretty {
-                        Text(MessagePrettyPrinter.prettyText(message.body, seed: message.seq))
+                        MessageBodyView(
+                            source: message.body, seed: message.seq, isMine: isMine
+                        )
                     } else {
-                        Text(message.body)
+                        Text(message.body).textSelection(.enabled)
                     }
                 }
-                    .font(.body).lineSpacing(3).textSelection(.enabled)
+                    // lineSpacing 을 안 건다. 선택이 켜지면 글자를 그리는 길이
+                    // 바뀌면서 줄 간격 해석이 달라지고, 그만큼 본문이 자란다.
+                    // 뒤집힌 LazyVStack 은 그 바뀐 높이를 다시 제안하지 않아
+                    // 말풍선은 옛 높이 그대로 남고 아래 한두 줄이 밖으로 밀린다.
+                    // Pretty 토글로 회복되던 것이 그 증거다 — 토글이 내용을
+                    // 바꿔서 새로 재게 만든 것이지 내용이 문제가 아니었다.
+                    //
+                    // 줄 사이 여백은 세로 패딩으로 대신한다. 선택 여부와 무관해서
+                    // 다시 잴 일이 없다.
+                    .font(.body).textSelection(.enabled)
                     // 원문과 Pretty는 줄 수가 다르다. 뒤집힌 LazyVStack 안에서는
                     // 바뀐 높이가 다시 제안되지 않아 아래가 잘린다. Text가 자기
                     // 높이를 그대로 말하게 둔다.
                     .fixedSize(horizontal: false, vertical: true)
                     .foregroundStyle(isMine ? Color.white : Color.primary)
-                    .padding(.horizontal, 14).padding(.vertical, 11)
+                    .padding(.horizontal, 14).padding(.vertical, 13)
                     .background(bubbleColor, in: RoundedRectangle(cornerRadius: 16))
                     .overlay {
                         if !isMine {

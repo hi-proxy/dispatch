@@ -27,6 +27,41 @@ import Testing
     #expect(CodeReference.found(in: "커밋 1294aa1 을 봐라").isEmpty)
 }
 
+@Test func aRootPointsAtAnotherRoomsRepository() {
+    // 뿌리가 없으면 남의 방 코드를 짚을 길이 없다. 비서는 자기 방에 저장소가
+    // 없어서 어느 방의 코드도 못 가리킨다.
+    let found = CodeReference.found(in: "{{ARCH}}/lib/src/index.dart:33-35 을 봐라")
+    #expect(found.count == 1)
+    #expect(found[0].prefix == "ARCH")
+    #expect(found[0].path == "lib/src/index.dart")
+    #expect(found[0].firstLine == 33 && found[0].lastLine == 35)
+    #expect(found[0].label == "ARCH lib/src/index.dart:33-35")
+}
+
+@Test func aReferenceCanCarryTheCommit() {
+    // 짚은 쪽과 보는 쪽이 다른 브랜치를 열고 있으면 같은 줄이 다른 코드다.
+    let found = CodeReference.found(in: "{{FUNG}}/fungis_node/inbox.py@23927f6:68")
+    #expect(found.count == 1)
+    #expect(found[0].prefix == "FUNG")
+    #expect(found[0].path == "fungis_node/inbox.py")
+    #expect(found[0].commit == "23927f6")
+    #expect(found[0].firstLine == 68)
+
+    // 뿌리 없이 커밋만 실어도 된다. 그 방 안에서 옛 줄을 짚는 경우다.
+    let here = CodeReference.found(in: "web.py@a1b2c3d4e5:10-12")
+    #expect(here.first?.prefix == nil)
+    #expect(here.first?.commit == "a1b2c3d4e5")
+    #expect(here.first?.lastLine == 12)
+}
+
+@Test func aPlainSpotStillHasNoRootAndNoCommit() {
+    // 옛 형식이 그대로 열려야 한다. 오늘 이전에 오간 참조가 전부 그 모양이다.
+    let found = CodeReference.found(in: "db.py:601")
+    #expect(found.first?.prefix == nil)
+    #expect(found.first?.commit == nil)
+    #expect(found.first?.label == "db.py:601")
+}
+
 @Test func theSameSpotIsListedOnce() {
     let found = CodeReference.found(in: "db.py:601 과 db.py:601 은 같은 자리다")
     #expect(found.count == 1)
