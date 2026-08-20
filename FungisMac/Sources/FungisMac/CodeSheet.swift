@@ -19,6 +19,7 @@ struct CodeSheet: View {
             HStack {
                 Text(reference.label).font(.headline).textSelection(.enabled)
                     .foregroundStyle(CodeColors.foreground)
+                if let file { origin(of: file) }
                 if let file, file.truncated {
                     Text("앞 \(file.lines.count)줄만 · 전체 \(file.totalLines)줄")
                         .font(.caption).foregroundStyle(CodeColors.comment)
@@ -61,6 +62,26 @@ struct CodeSheet: View {
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// 어느 브랜치의 몇 번 커밋인가. 짚어 준 줄이 어느 코드의 줄인지는
+    /// 이것 없이 말할 수 없다 — 클라이언트마다 다른 브랜치를 열고 있다.
+    @ViewBuilder private func origin(of file: RepositoryFile) -> some View {
+        HStack(spacing: 5) {
+            if let branch = file.branch {
+                Label(branch, systemImage: "arrow.triangle.branch")
+            }
+            if let head = file.head {
+                Text(head).monospaced()
+            }
+            if file.dirty == true {
+                // 커밋 안 한 변경이 있으면 이 줄이 그 커밋의 줄이 아닐 수 있다.
+                Label("커밋 안 한 변경 있음", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(CodeColors.orange)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(CodeColors.comment)
     }
 
     private func line(number: Int, text: AttributedString) -> some View {

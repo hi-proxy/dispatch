@@ -270,6 +270,7 @@ class PMClient:
         track: str | None = None,
         tags: list[str] | None = None,
         inherit_context: bool = True,
+        later: bool = False,
     ) -> dict:
         result = self._request(
             "POST",
@@ -291,6 +292,7 @@ class PMClient:
                 "track": track,
                 "tags": tags,
                 "inherit_context": inherit_context,
+                "later": later,
             },
         )
         assert isinstance(result, dict)
@@ -312,6 +314,7 @@ class PMClient:
         track: str | None = None,
         tags: list[str] | None = None,
         inherit_context: bool = True,
+        later: bool = False,
         role_ids: list[str] | None = None,
     ) -> dict:
         result = self._request(
@@ -340,6 +343,7 @@ class PMClient:
                 "track": track,
                 "tags": tags,
                 "inherit_context": inherit_context,
+                "later": later,
             },
         )
         assert isinstance(result, dict)

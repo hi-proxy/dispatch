@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .cmux import CmuxAdapter
@@ -304,6 +305,28 @@ Successful output echoes the exact body stored by the server.
         + ADDRESSING,
     )
     add_addressing(request, project=True, reply=True, level=True)
+    wake = commands.add_parser(
+        "wake",
+        help="ask to be woken later, so a long step does not need a nudge",
+        description="""\
+fungis wake --in 20m     20분 뒤에 깨워 달라
+fungis wake --now        지금 깨워 달라 (예약을 앞당긴다)
+fungis wake --cancel     예약을 지운다
+
+착수만 선언하고 턴이 끝나면 아무도 말을 걸 때까지 선다. 다음 걸음의 크기는
+네가 제일 잘 아니 네가 예약한다.
+
+  m 분 · h 시간. 최대 6시간
+  어떤 이유로든 깨어나면 예약은 소진된다
+  진전 없이 계속 미루면 그 횟수가 쌓이고, 그게 곧 막힘 신호다
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    when = wake.add_mutually_exclusive_group(required=True)
+    when.add_argument("--in", dest="delay", metavar="20m", help="20m · 2h")
+    when.add_argument("--now", action="store_true")
+    when.add_argument("--cancel", action="store_true")
+    wake.add_argument("--note", help="왜 미루는지 한 줄. 종료 보고에 쓰인다")
     shared = commands.add_parser("shared", help="read selected shared SSOT keys")
     shared.add_argument("keys", nargs="+")
     work = commands.add_parser("work", help="track structured work time and reports")
@@ -345,6 +368,11 @@ def add_addressing(
     command.add_argument(
         "--cc-id", action="append", default=[],
         help="copy by absolute id; dies when the session changes",
+    )
+    command.add_argument(
+        "--later", action="store_true",
+        help="do not wake them: it waits in the inbox until they finish the step "
+             "they are on. Use it for anything that is not needed this turn",
     )
     command.add_argument(
         "--track",
@@ -406,6 +434,10 @@ def format_bootstrap(value: dict) -> str:
             + usage.get("send", 'fungis send "..."'),
             f"- request review/approval: {usage['request_review']} / {usage['request_approval']}",
             f"- work: {usage['work_start']} / {usage['work_report']} / {usage['work_done']}",
+            # 긴 걸음 전에 안 걸면 착수만 선언하고 턴이 끝난 뒤 아무도 말을 걸
+            # 때까지 선다. 옛 서버는 이 칸이 없으므로 기본값을 둔다.
+            "- book your next step before a long one: "
+            + usage.get("wake_later", "fungis wake --in 20m"),
             # 보드에 올리는 것은 그 방의 몫이다. 안 알려주면 PM이 대신 쳐 넣게
             # 되고, 그러면 보드는 PM이 이미 아는 것만 담는다.
             '- board: fungis board / fungis board add "..." / '
@@ -540,6 +572,9 @@ def emit_inbox(messages: list[dict]) -> None:
                 # 나에게 온 말인지 옆에서 듣는 말인지. 이 구분이 없으면 참조로
                 # 받은 것까지 지시로 읽고 조사에 들어간다.
                 "for_me": not message.get("is_reference"),
+                # 보낸 쪽이 지금 답하지 말라고 한 것. 깨우지도 않았으므로 이건
+                # 하던 걸음을 마치고 볼 말이다.
+                "later": bool(message.get("is_later")),
                 # PM이 마지막으로 말한 뒤 에이전트끼리 오간 횟수.
                 "chain": int(message.get("agent_chain") or 0),
                 # 무엇에 대한 답인지. 이게 빠지면 에이전트는 답글을 걸 수는
@@ -555,6 +590,12 @@ def emit_inbox(messages: list[dict]) -> None:
     print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     if messages:
         print('Reply with: fungis reply "YOUR MESSAGE"', file=sys.stderr)
+        if any(message.get("is_later") for message in messages):
+            print(
+                "later=true 는 지금 답할 것이 아니다. 하던 걸음을 마치고 본다 — "
+                "보낸 쪽이 깨우지 않고 두었다.",
+                file=sys.stderr,
+            )
         if any(message.get("is_reference") for message in messages):
             print(
                 "for_me=false means you were copied. Read it, do not act on it, "
@@ -960,6 +1001,34 @@ def stored_echo(
     }
 
 
+# 한 번에 미룰 수 있는 최대치. 미루기만 하다 루프가 조용히 죽는 것이 가장
+# 나쁘다 — 여섯 시간을 넘겨 미루는 것은 예약이 아니라 포기다.
+MAX_WAKE_DELAY_SECONDS = 6 * 60 * 60
+
+
+def parse_delay(value: str) -> int:
+    """20m · 2h 를 초로. 숫자만 주면 분으로 읽는다."""
+    text = value.strip().lower()
+    unit = text[-1:]
+    if unit in ("m", "h"):
+        number, scale = text[:-1], 60 if unit == "m" else 3600
+    else:
+        number, scale = text, 60
+    try:
+        amount = float(number)
+    except ValueError as error:
+        raise ValueError(f"20m 이나 2h 처럼 준다: {value}") from error
+    if amount <= 0:
+        raise ValueError(f"미루는 시간은 0보다 커야 한다: {value}")
+    seconds = int(amount * scale)
+    if seconds > MAX_WAKE_DELAY_SECONDS:
+        raise ValueError(
+            f"한 번에 {MAX_WAKE_DELAY_SECONDS // 3600}시간을 넘겨 미룰 수 없다. "
+            "그보다 길면 예약이 아니라 멈춤이니 그렇게 보고하라."
+        )
+    return seconds
+
+
 def warn_if_nobody_received(result: dict, role_ids: list[str]) -> None:
     """아무도 안 받은 것은 성공 출력 안에서 실패처럼 보이지 않는다.
 
@@ -1116,12 +1185,43 @@ def main() -> None:
                 track=args.track,
                 tags=args.tag,
                 inherit_context=not args.no_inherit_context,
+                later=args.later,
             )
             warn_if_nobody_received(result, role_ids)
             print(json.dumps(
                 stored_echo(result, roles=role_ids, in_reply_to=in_reply_to),
                 ensure_ascii=False,
             ))
+        elif args.command == "wake":
+            me = binding["local_name"]
+            if args.cancel:
+                registry.clear_wake_schedule(me)
+                print(json.dumps({"wake": {"scheduled": None}}, ensure_ascii=False))
+            else:
+                seconds = 0 if args.now else parse_delay(args.delay)
+                due = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+                booked = registry.schedule_wake(
+                    me,
+                    due.strftime("%Y-%m-%dT%H:%M:%S.") + f"{due.microsecond // 1000:03d}Z",
+                    args.note,
+                )
+                deferrals = int(booked.get("deferrals") or 1)
+                print(json.dumps({
+                    "wake": {
+                        "scheduled": booked.get("due_at"),
+                        "in_seconds": seconds,
+                        "note": booked.get("note"),
+                        # 진전 없이 반복해서 미루는 것은 그 자체가 막힘 신호다.
+                        # 세어서 돌려주면 미루는 쪽이 자기가 몇 번째인지 안다.
+                        "deferrals": deferrals,
+                    }
+                }, ensure_ascii=False))
+                if deferrals >= 3:
+                    print(
+                        f"{deferrals}번째로 미뤘다. 진전이 없으면 미루지 말고 "
+                        "서서 보고하라.",
+                        file=sys.stderr,
+                    )
         elif args.command == "shared":
             values = PMClient(
                 config["server"], registry,
@@ -1168,6 +1268,10 @@ def main() -> None:
             raise SystemExit(write_error_message(error)) from error
         raise SystemExit(str(error)) from error
     except RuntimeError as error:
+        raise SystemExit(str(error)) from error
+    except ValueError as error:
+        # 잘못 친 값이다. 역추적을 보여 주면 읽는 쪽이 자기가 무엇을 잘못
+        # 쳤는지 대신 파이썬 속을 읽게 된다.
         raise SystemExit(str(error)) from error
     finally:
         if "registry" in locals():

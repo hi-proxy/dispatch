@@ -343,3 +343,272 @@ def test_an_empty_read_clears_the_wake_it_answered(tmp_path, monkeypatch):
     assert len(watcher.read_messages("surface-1")) == 1
     assert registry.claim("agent-1")["through_seq"] == 9
     registry.close()
+
+
+def _bound(tmp_path):
+    from fungis_node.cmux import CmuxAgentCandidate
+    from fungis_node.registry import LocalRegistry
+
+    registry = LocalRegistry(tmp_path / "node.db")
+    registry.attach("agent-1", CmuxAgentCandidate(
+        provider="claude", agent_session_id="session-1", surface_id="surface-1",
+        surface_ref="surface:1", workspace_ref="workspace:1", title="Agent",
+        tty="ttys001", cwd="/project", lifecycle="idle",
+        binding_verified=True, verification_reason="agent_tty_matches_surface",
+    ))
+    return registry
+
+
+class _Screen:
+    """화면은 늘 비어 있고, 붙잡은 것을 그대로 돌려준다."""
+
+    def __init__(self, current):
+        self.current = current
+        self.wakes = []
+
+    def resolve_binding_candidate(self, **binding):
+        return self.current
+
+    def wake(self, surface_id, text):
+        self.wakes.append(text)
+
+    def prompt_ready(self, surface_id):
+        return True
+
+
+def test_a_worker_can_book_its_own_next_step(tmp_path):
+    """보낼 말이 없어도 예약 시각이면 깨운다.
+
+    착수만 선언하고 턴이 끝나면 아무도 말을 걸 때까지 선다. 2026-08-19 루프
+    2회차에서 그렇게 1시간이 갔다.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from fungis_node.gate import IdleGate
+
+    registry = _bound(tmp_path)
+    screen = _Screen(registry.list()[0])
+    now = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    gate = IdleGate(registry, screen, settle_seconds=0, now=lambda: now)
+
+    # 예약이 없으면 보낼 것도 없으니 안 깨운다. 종전 그대로다.
+    assert gate.evaluate("agent-1", refresh=False).reason == "no_pending"
+
+    # 아직 시각이 안 됐다.
+    later = (now + timedelta(minutes=20)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    registry.schedule_wake("agent-1", later)
+    assert gate.evaluate("agent-1", refresh=False).reason == "no_pending"
+
+    # 시각이 지나면 깨운다. 문구가 인박스와 다르다 — 받는 쪽이 왜 깨어났는지
+    # 알아야 인박스를 읽을지 하던 일을 이어갈지 정한다.
+    past = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    registry.schedule_wake("agent-1", past)
+    decision = gate.run("agent-1", send=True, refresh=False)
+    assert decision.eligible and decision.reason == "scheduled"
+    assert screen.wakes == [gate.due_text]
+
+    # 소진된다. 한 번 예약으로 계속 깨우면 그게 소음이다.
+    assert registry.wake_schedule("agent-1") is None
+    registry.close()
+
+
+def test_a_scheduled_wake_does_not_block_the_inbox_path(tmp_path):
+    """예약 깨우기는 확인을 기다릴 것이 없다.
+
+    wake_attempts 에 남기면 그 뒤 인박스 깨우기가 '확인 안 됨' 으로 막힌다 —
+    어제 열 시간을 쓴 그 자리다.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from fungis_node.gate import IdleGate
+
+    registry = _bound(tmp_path)
+    screen = _Screen(registry.list()[0])
+    now = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    gate = IdleGate(registry, screen, settle_seconds=0, now=lambda: now)
+
+    past = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    registry.schedule_wake("agent-1", past)
+    gate.run("agent-1", send=True, refresh=False)
+    assert registry.outstanding_wake("agent-1") is None
+    registry.close()
+
+
+def test_waking_for_any_reason_spends_the_booking(tmp_path):
+    """인박스로 이미 턴이 열렸는데 예약이 남으면 곧바로 한 번 더 찌른다."""
+    from datetime import datetime, timedelta, timezone
+
+    from fungis_node.gate import IdleGate
+
+    registry = _bound(tmp_path)
+    screen = _Screen(registry.list()[0])
+    now = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    gate = IdleGate(registry, screen, settle_seconds=0, now=lambda: now)
+
+    registry.record_event({
+        "event_id": "e1", "event_seq": 1, "recipient_id": "agent-1",
+        "through_seq": 1, "kind": "inbox_available",
+    })
+    later = (now + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    registry.schedule_wake("agent-1", later)
+
+    decision = gate.run("agent-1", send=True, refresh=False)
+    assert decision.reason == "eligible"      # 인박스 쪽이다
+    assert registry.wake_schedule("agent-1") is None
+    registry.close()
+
+
+def test_a_delay_has_a_ceiling_and_deferrals_are_counted(tmp_path):
+    """미루기만 하다 조용히 죽는 것이 가장 나쁘다."""
+    import pytest
+
+    from fungis_node.agent_cli import parse_delay
+
+    assert parse_delay("20m") == 1200
+    assert parse_delay("2h") == 7200
+    assert parse_delay("30") == 1800          # 숫자만 주면 분
+    with pytest.raises(ValueError, match="6시간"):
+        parse_delay("9h")
+    with pytest.raises(ValueError):
+        parse_delay("abc")
+    with pytest.raises(ValueError):
+        parse_delay("0m")
+
+    registry = _bound(tmp_path)
+    for expected in (1, 2, 3):
+        booked = registry.schedule_wake("agent-1", "2026-08-20T12:00:00.000Z")
+        assert booked["deferrals"] == expected
+    registry.close()
+
+
+class _BusyScreen(_Screen):
+    """일하는 중이라 프롬프트가 안 비어 있다."""
+
+    def prompt_ready(self, surface_id):
+        return False
+
+
+def test_a_booking_does_not_interrupt_a_working_agent(tmp_path):
+    """예약 시각이 됐어도 일하는 중이면 안 찌른다.
+
+    처음 만들 때 예약 분기를 화면 검사보다 앞에 뒀다가 이 성질을 깼다.
+    보낼 말이 없다는 것과 깨워도 된다는 것은 다른 얘기다.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from fungis_node.gate import IdleGate
+
+    from fungis_node.cmux import CmuxAgentCandidate
+
+    registry = _bound(tmp_path)
+    # cmux 가 running 이라고 말하고 화면도 안 비어 있다.
+    working = CmuxAgentCandidate(
+        provider="claude", agent_session_id="session-1", surface_id="surface-1",
+        surface_ref="surface:1", workspace_ref="workspace:1", title="Agent",
+        tty="ttys001", cwd="/project", lifecycle="running",
+        binding_verified=True, verification_reason="agent_tty_matches_surface",
+    )
+    registry.refresh_candidate("agent-1", working)
+    screen = _BusyScreen(working)
+    now = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    gate = IdleGate(registry, screen, settle_seconds=0, now=lambda: now)
+
+    past = (now - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    registry.schedule_wake("agent-1", past)
+
+    decision = gate.run("agent-1", send=True, refresh=False)
+    assert not decision.eligible
+    assert decision.reason == "lifecycle_running"
+    assert screen.wakes == []
+    # 예약은 남는다. 화면이 비면 그때 깨운다.
+    assert registry.wake_schedule("agent-1") is not None
+    registry.close()
+
+
+def test_only_the_last_booking_stands(tmp_path):
+    """같은 사람이 여러 번 걸면 마지막 것 하나만 남는다.
+
+    쌓아 두면 한 번 깨어난 뒤에도 지난 예약들이 줄줄이 따라와 찌른다.
+    """
+    registry = _bound(tmp_path)
+    registry.schedule_wake("agent-1", "2026-08-20T12:00:00.000Z", "첫째")
+    registry.schedule_wake("agent-1", "2026-08-20T13:00:00.000Z", "둘째")
+    booked = registry.wake_schedule("agent-1")
+    assert booked["due_at"] == "2026-08-20T13:00:00.000Z"
+    assert booked["note"] == "둘째"
+    assert booked["deferrals"] == 2
+    registry.close()
+
+
+def test_bookings_are_per_agent(tmp_path):
+    """한 사람의 예약이 다른 사람을 깨우지 않는다."""
+    from fungis_node.cmux import CmuxAgentCandidate
+
+    registry = _bound(tmp_path)
+    registry.attach("agent-2", CmuxAgentCandidate(
+        provider="claude", agent_session_id="session-2", surface_id="surface-2",
+        surface_ref="surface:2", workspace_ref="workspace:1", title="Other",
+        tty="ttys002", cwd="/other", lifecycle="idle",
+        binding_verified=True, verification_reason="agent_tty_matches_surface",
+    ))
+    registry.schedule_wake("agent-1", "2026-08-20T12:00:00.000Z")
+    assert registry.wake_schedule("agent-1") is not None
+    assert registry.wake_schedule("agent-2") is None
+    registry.close()
+
+
+def test_an_unreadable_booking_does_not_stop_the_gate(tmp_path):
+    """못 읽는 예약 하나가 게이트를 통째로 멈추면 그게 더 나쁘다."""
+    from datetime import datetime, timezone
+
+    from fungis_node.gate import IdleGate
+
+    registry = _bound(tmp_path)
+    screen = _Screen(registry.list()[0])
+    gate = IdleGate(
+        registry, screen, settle_seconds=0,
+        now=lambda: datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc),
+    )
+    registry.schedule_wake("agent-1", "쓰레기")
+    assert gate.evaluate("agent-1", refresh=False).reason == "no_pending"
+    registry.close()
+
+
+def test_a_later_message_waits_in_the_inbox_without_opening_a_turn(tmp_path):
+    """쌓이는 것과 깨울 이유가 있는 것은 다르다.
+
+    한 걸음 도는 중에 끼면 그 걸음이 통째로 밀린다. 그래서 later 는 인박스에
+    그대로 남되 턴을 열지 않는다.
+    """
+    from datetime import datetime, timezone
+
+    from fungis_node.gate import IdleGate
+
+    registry = _bound(tmp_path)
+    screen = _Screen(registry.list()[0])
+    gate = IdleGate(
+        registry, screen, settle_seconds=0,
+        now=lambda: datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc),
+    )
+
+    registry.record_event({
+        "event_id": "quiet-1", "event_seq": 1, "recipient_id": "agent-1",
+        "through_seq": 7, "kind": "inbox_later",
+    })
+    summary = registry.pending_summary("agent-1")
+    assert summary["pending_count"] == 1     # 인박스에는 있다
+    assert summary["waking_count"] == 0      # 깨울 이유는 아니다
+    assert summary["through_seq"] == 7       # 커서는 전부에서 뽑는다
+
+    assert gate.run("agent-1", send=True, refresh=False).reason == "no_pending"
+    assert screen.wakes == []
+
+    # 보통 메시지가 하나라도 오면 그때 깨운다. 밀려 있던 것도 함께 읽힌다.
+    registry.record_event({
+        "event_id": "loud-1", "event_seq": 2, "recipient_id": "agent-1",
+        "through_seq": 8, "kind": "inbox_available",
+    })
+    assert registry.pending_summary("agent-1")["waking_count"] == 1
+    assert gate.run("agent-1", send=True, refresh=False).reason == "eligible"
+    assert screen.wakes == [gate.wake_text]
+    registry.close()

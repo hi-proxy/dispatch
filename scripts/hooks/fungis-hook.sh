@@ -73,22 +73,35 @@ if not messages:
 # 참조 표시를 지우지 않는다. inbox의 for_me를 여기서 버리면 규범이
 # "for_me=false면 답하지 않는다"라고 해도 근거가 사라진다. 남에게 온 말에
 # 답하게 되는 자리다.
-mine = [m for m in messages if m.get("for_me", True)]
+mine = [m for m in messages if m.get("for_me", True) and not m.get("later")]
 copied = [m for m in messages if not m.get("for_me", True)]
+deferred = [m for m in messages if m.get("later")]
 head = "[fungis] 새 메시지 %d건" % len(messages)
 if mine:
     head += ". 답은 fungis reply로 보낸다."
+elif deferred and not copied:
+    head += ". 전부 [나중] 이다 — 하던 걸음을 마치고 본다."
 else:
     head += ". 전부 참조다 — 맥락으로만 두고 답하지 않는다."
 lines = [head]
 for m in messages:
-    mark = "" if m.get("for_me", True) else " [참조]"
+    if m.get("later"):
+        mark = " [나중]"
+    elif not m.get("for_me", True):
+        mark = " [참조]"
+    else:
+        mark = ""
     lines.append(
         "#%s %s%s: %s"
         % (m.get("seq"), m.get("from"), mark, (m.get("body") or "").strip())
     )
 if mine and copied:
     lines.append("[참조] 표시는 남에게 온 말이다. 답하지 않는다.")
+if deferred:
+    lines.append(
+        "[나중] 은 보낸 쪽이 깨우지 않고 둔 말이다. 하던 걸음을 마치고 본다 — "
+        "이번 턴에 답하지 않는다."
+    )
 
 print(json.dumps({
     "hookSpecificOutput": {

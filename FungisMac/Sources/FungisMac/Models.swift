@@ -538,9 +538,15 @@ struct RepositoryFile: Decodable {
     let lines: [String]
     let totalLines: Int
     let truncated: Bool
+    /// 어느 브랜치의 줄인가. 클라이언트마다 다른 브랜치를 열고 있을 수 있어서,
+    /// 이것이 없으면 짚어 준 줄 번호가 다른 코드를 가리킬 수 있다.
+    let branch: String?
+    let head: String?
+    /// 커밋 안 한 변경이 있으면 이 줄이 그 커밋의 줄이라는 보장이 없다.
+    let dirty: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case path, lines, truncated
+        case path, lines, truncated, branch, head, dirty
         case totalLines = "total_lines"
     }
 }

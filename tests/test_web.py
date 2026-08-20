@@ -464,3 +464,51 @@ def test_a_long_file_is_cut_and_says_so(tmp_path):
     assert len(seen["lines"]) == web.FILE_VIEW_MAX_LINES
     assert seen["total_lines"] == 6000
     assert seen["truncated"] is True
+
+
+def test_a_file_says_which_branch_it_came_from(tmp_path):
+    """클라이언트마다 다른 브랜치를 열고 있을 수 있다.
+
+    브랜치 없이 준 줄 번호는 다른 코드를 가리킬 수 있어서, 짚어 준 자리가
+    뜻을 가지려면 어느 브랜치의 몇 번 커밋인지까지 말해야 한다.
+    """
+    import subprocess
+
+    from fungis_node.web import read_repository_file
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "a.py").write_text("one\ntwo\n")
+
+    def git(*args):
+        subprocess.run(
+            ["git", *args], cwd=repo, check=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    git("add", "-A")
+    git("commit", "-q", "-m", "first")
+
+    seen = read_repository_file(str(repo), "a.py")
+    assert seen["branch"]
+    assert seen["head"]
+    assert seen["dirty"] is False
+
+    # 커밋 안 한 변경이 있으면 이 줄이 그 커밋의 줄이라는 보장이 없다.
+    (repo / "a.py").write_text("one\ntwo\nthree\n")
+    assert read_repository_file(str(repo), "a.py")["dirty"] is True
+
+
+def test_a_file_outside_git_still_opens(tmp_path):
+    """저장소가 아니어도 파일은 보여준다. 브랜치만 없다고 말한다."""
+    from fungis_node.web import read_repository_file
+
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "note.txt").write_text("hello\n")
+    seen = read_repository_file(str(plain), "note.txt")
+    assert seen["lines"] == ["hello"]
+    assert seen["branch"] is None

@@ -14,6 +14,10 @@ from .cmux import CmuxAgentCandidate
 # 안전하다 — 호출문 한 줄이고 게이트가 빈 프롬프트를 확인한 뒤에만 넣는다.
 WAKE_CONFIRM_TTL_SECONDS = 600
 
+# 인박스에는 쌓이되 턴을 열지는 않는 배달. 보내는 쪽이 `--later` 로 정한다.
+# 서버가 이 값을 이벤트 kind 로 실어 보내므로 노드는 새 칸을 안 만든다.
+QUIET_EVENT_KIND = "inbox_later"
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bindings (
@@ -58,6 +62,17 @@ CREATE TABLE IF NOT EXISTS inbox_claims (
     through_seq INTEGER NOT NULL,
     agent_session_id TEXT NOT NULL,
     claimed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS wake_schedule (
+    recipient_id TEXT PRIMARY KEY,
+    due_at TEXT NOT NULL,
+    note TEXT,
+    -- 진전 없이 반복해서 미루는 것은 그 자체가 막힘 신호다. 세어 두지 않으면
+    -- 미루기만 하다 조용히 죽는 것을 밖에서 볼 방법이 없다.
+    deferrals INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
 CREATE TABLE IF NOT EXISTS project_repositories (
@@ -464,17 +479,27 @@ class LocalRegistry:
         return cursor.rowcount
 
     def pending_summary(self, recipient_id: str) -> dict[str, int]:
+        """무엇이 쌓였고, 그중 무엇이 깨울 이유인가.
+
+        둘을 가른다. `later` 로 온 것은 인박스에 그대로 쌓이지만 그것 때문에
+        턴을 열지는 않는다 — 한 걸음 도는 중에 끼면 그 걸음이 통째로 밀린다.
+
+        through_seq 는 세는 것과 무관하게 전부에서 뽑는다. 커서는 읽은 자리를
+        말하는 것이라 깨울 이유였는지와 상관이 없다.
+        """
         recipient_id = self.recipient_key(recipient_id)
         row = self.connection.execute(
             """
             SELECT COUNT(*) AS pending_count,
+                   SUM(CASE WHEN kind = ? THEN 0 ELSE 1 END) AS waking_count,
                    COALESCE(MAX(through_seq), 0) AS through_seq
             FROM pending_events WHERE recipient_id = ?
             """,
-            (recipient_id,),
+            (QUIET_EVENT_KIND, recipient_id),
         ).fetchone()
         return {
             "pending_count": int(row["pending_count"]),
+            "waking_count": int(row["waking_count"] or 0),
             "through_seq": int(row["through_seq"]),
         }
 
@@ -508,6 +533,55 @@ class LocalRegistry:
             (recipient_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    def schedule_wake(
+        self, recipient_id: str, due_at: str, note: str | None = None
+    ) -> dict[str, Any]:
+        """다음 걸음을 스스로 예약한다.
+
+        지금 깨우기는 인박스에 뭔가 있을 때만 나간다. 그래서 worker 가 착수를
+        선언하고 턴을 끝내면, 아무도 말을 안 거는 한 턴이 다시 안 열린다 —
+        2026-08-19 루프 2회차에서 그렇게 1시간이 갔다.
+
+        이 예약은 보낼 말이 없어도 깨운다. 이유가 다르다.
+
+        같은 사람이 다시 걸면 미룬 횟수를 센다. 진전 없이 반복해서 미루는 것은
+        그 자체가 막힘 신호다.
+        """
+        recipient_id = self.recipient_key(recipient_id)
+        self.connection.execute(
+            """
+            INSERT INTO wake_schedule(recipient_id, due_at, note)
+            VALUES (?, ?, ?)
+            ON CONFLICT(recipient_id) DO UPDATE SET
+              due_at = excluded.due_at,
+              note = excluded.note,
+              deferrals = wake_schedule.deferrals + 1,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+            """,
+            (recipient_id, due_at, note),
+        )
+        self.connection.commit()
+        return self.wake_schedule(recipient_id) or {}
+
+    def wake_schedule(self, recipient_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT * FROM wake_schedule WHERE recipient_id = ?",
+            (self.recipient_key(recipient_id),),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def clear_wake_schedule(self, recipient_id: str) -> None:
+        """어떤 이유로든 깨어났으면 예약은 소진된 것이다.
+
+        인박스 깨우기로 이미 턴이 열렸는데 예약이 남아 있으면 곧바로 한 번 더
+        찌른다. 깨우는 것이 목적이지 그 이유가 무엇이었냐가 목적이 아니다.
+        """
+        self.connection.execute(
+            "DELETE FROM wake_schedule WHERE recipient_id = ?",
+            (self.recipient_key(recipient_id),),
+        )
+        self.connection.commit()
 
     def record_wake(self, recipient_id: str, through_seq: int) -> None:
         recipient_id = self.recipient_key(recipient_id)

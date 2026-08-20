@@ -59,6 +59,8 @@ class MessageCreate(BaseModel):
     track: str | None = Field(default=None, max_length=120)
     tags: list[str] | None = None
     inherit_context: bool = True
+    # 인박스에는 쌓이되 턴을 열지 않는다. 받는 쪽은 하던 걸음을 마치고 본다.
+    later: bool = False
 
 
 class RoleCreate(BaseModel):

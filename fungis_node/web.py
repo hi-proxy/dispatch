@@ -85,11 +85,19 @@ def read_repository_file(repo_root: str, relative: str) -> dict[str, object]:
         raise FileNotFoundError(f"not a file: {relative}")
     text = target.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
+    # 어느 브랜치의 몇 번째 줄인지까지 말해야 짚어 준 자리가 뜻을 갖는다.
+    # 클라이언트마다 다른 브랜치를 열고 있을 수 있어서, 브랜치 없이 준 줄
+    # 번호는 다른 코드를 가리킬 수 있다.
+    git = inspect_git_context(str(root)) or {}
     return {
         "path": str(target.relative_to(root)),
         "lines": lines[:FILE_VIEW_MAX_LINES],
         "total_lines": len(lines),
         "truncated": len(lines) > FILE_VIEW_MAX_LINES,
+        "branch": git.get("branch"),
+        "head": git.get("head"),
+        # 커밋 안 한 변경이 있으면 이 줄이 그 커밋의 줄이라는 보장이 없다.
+        "dirty": bool(git.get("dirty")),
     }
 
 
@@ -296,6 +304,17 @@ def create_web_app(
                             value["connected"]
                             and candidate.lifecycle == "needs_input"
                             and not cmux.prompt_ready(candidate.surface_id)
+                        )
+                        # 상태만으로는 '지금 안 돌고 있다' 밖에 못 말한다.
+                        # 언제 다시 반응하는지가 있어야 기다릴지 재촉할지
+                        # 정할 수 있다. 그 값을 본인이 예약으로 남긴다.
+                        booked = (
+                            pm.registry.wake_schedule(binding["local_name"])
+                            if binding else None
+                        )
+                        value["next_wake_at"] = booked["due_at"] if booked else None
+                        value["wake_deferrals"] = (
+                            booked["deferrals"] if booked else 0
                         )
                         agents.append(value)
                     discovery_cache.update(

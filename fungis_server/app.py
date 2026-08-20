@@ -277,6 +277,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
             track=payload.track,
             tags=payload.tags,
             inherit_context=payload.inherit_context,
+            later=payload.later,
         )
         for event in events:
             await hub.publish(event)

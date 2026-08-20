@@ -1685,6 +1685,9 @@ class FungisDB:
                 "send": 'fungis send "..."',
                 "request_review": 'fungis request --level r2 "..."',
                 "request_approval": 'fungis request --level r3 "..."',
+                # 긴 걸음을 시작하기 전에 이걸 걸어야 한다. 안 걸면 착수만
+                # 선언하고 턴이 끝난 뒤 아무도 말을 걸 때까지 선다.
+                "wake_later": "fungis wake --in 20m",
                 "work_start": 'fungis work start "..."',
                 "work_report": 'fungis work report "..."',
                 "work_done": 'fungis work done "..."',
@@ -1736,17 +1739,24 @@ class FungisDB:
 
     @staticmethod
     def _create_delivery_event(
-        conn: sqlite3.Connection, recipient_id: str, message_seq: int
+        conn: sqlite3.Connection, recipient_id: str, message_seq: int,
+        *, later: bool = False,
     ) -> dict[str, Any]:
+        """배달을 알린다. later 면 쌓이되 깨우지는 않는다.
+
+        새 칸을 안 만들고 kind 를 가른다. 이 값이 서버에서 이벤트로, 이벤트에서
+        노드로 그대로 흘러 게이트까지 닿는다 — 중간에 옮겨 적는 자리가 없다.
+        """
+        kind = "inbox_later" if later else "inbox_available"
         event_id = str(uuid.uuid4())
         cursor = conn.execute(
             """INSERT INTO delivery_events(id, recipient_id, kind, through_message_seq)
-               VALUES (?, ?, 'inbox_available', ?)""",
-            (event_id, recipient_id, message_seq),
+               VALUES (?, ?, ?, ?)""",
+            (event_id, recipient_id, kind, message_seq),
         )
         return {
             "event_id": event_id, "event_seq": int(cursor.lastrowid),
-            "kind": "inbox_available", "recipient_id": recipient_id,
+            "kind": kind, "recipient_id": recipient_id,
             "through_seq": message_seq,
         }
 
@@ -1781,6 +1791,7 @@ class FungisDB:
         track: str | None = None,
         tags: list[str] | None = None,
         inherit_context: bool = True,
+        later: bool = False,
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         message_id = message_id or str(uuid.uuid4())
         # HQ에는 역할이 없어서 받을 사람을 고를 목록 자체가 없다. 거기서 받는
@@ -1883,14 +1894,18 @@ class FungisDB:
                     (principal_id, message_seq),
                 )
                 events.append(
-                    self._create_delivery_event(conn, principal_id, message_seq)
+                    self._create_delivery_event(
+                        conn, principal_id, message_seq, later=later
+                    )
                 )
             for recipient_id in unique_recipients:
                 conn.execute(
                     "INSERT INTO inbox(recipient_id, message_seq) VALUES (?, ?)",
                     (recipient_id, message_seq),
                 )
-                events.append(self._create_delivery_event(conn, recipient_id, message_seq))
+                events.append(self._create_delivery_event(
+                    conn, recipient_id, message_seq, later=later
+                ))
             row = conn.execute(
                 "SELECT * FROM messages WHERE seq = ?", (message_seq,)
             ).fetchone()
@@ -1912,6 +1927,14 @@ class FungisDB:
                                 WHERE r.message_seq = m.seq
                                   AND r.principal_id = i.recipient_id
                               ) AS is_reference,
+                              -- 깨우지 않고 보낸 것인가. 배달 사실에서 뽑는다 —
+                              -- 메시지에 칸을 더하면 같은 사실이 두 곳에 산다.
+                              EXISTS (
+                                SELECT 1 FROM delivery_events e
+                                WHERE e.through_message_seq = m.seq
+                                  AND e.recipient_id = i.recipient_id
+                                  AND e.kind = 'inbox_later'
+                              ) AS is_later,
                               -- 사람이 마지막으로 말한 뒤 에이전트끼리 몇 번
                               -- 오갔는지. 막지 않고 알려만 준다. 길어진 것을
                               -- 알면 새로 보탤 것이 없을 때 멈출 수 있다.

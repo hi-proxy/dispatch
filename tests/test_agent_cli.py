@@ -92,6 +92,7 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
                 "copy_role": 'fungis reply --ref ROLE "..."',
                 "request_review": 'fungis request --level r2 "..."',
                 "request_approval": 'fungis request --level r3 "..."',
+                "wake_later": "fungis wake --in 20m",
                 "work_start": 'fungis work start "..."',
                 "work_report": 'fungis work report "..."',
                 "work_done": 'fungis work done "..."',
@@ -103,6 +104,9 @@ def test_format_bootstrap_is_compact_and_marks_own_role():
     assert "roles: @dev-lead=you, @reviewer=Agent B, @front=unassigned" in output
     assert "fungis request --level r3" in output
     assert "restore context: fungis history 20" in output
+    # 긴 걸음 전에 예약하는 것을 새 세션이 여기서 배운다. 따로 알려 주는 것에
+    # 기대면 알려 주기 전에 시작한 에이전트가 그대로 선다.
+    assert "book your next step" in output
     assert "recovery:" in output
     assert "for_me=false means you were copied" in output
     assert "language PM uses" in output
@@ -183,6 +187,7 @@ def test_inbox_stdout_is_one_pure_json_document_and_guidance_is_stderr(capsys):
     assert json.loads(captured.out) == {
         "messages": [{
             "seq": 25, "project": "local", "from": "CTO", "for_me": True,
+            "later": False,
             "chain": 0, "in_reply_to": None, "body": "approve",
             "track": None, "tags": [],
         }]
