@@ -175,6 +175,28 @@ final class AppModel: ObservableObject {
         snapshot.roles.filter { referenceRoles.contains($0.id) }.compactMap(\.agentID)
     }
 
+    /// hosted 권한 요청은 principal/project만 들고 온다. 사람은 같은 모양의
+    /// 세션 UUID보다 그 방에서 맡긴 역할로 구별하므로, 현재 방 roles와 전역
+    /// agent membership을 함께 보고 안정적인 표시 이름을 만든다.
+    func hostedRoleNames(projectID: String, principalID: String) -> [String] {
+        var names = Set(snapshot.targets
+            .filter { $0.principalID == principalID }
+            .flatMap(\.memberships)
+            .filter { $0.projectID == projectID }
+            .map(\.roleName))
+        for agent in snapshot.agents where agent.principalID == principalID {
+            names.formUnion(agent.memberships
+                .filter { $0.projectID == projectID }
+                .map(\.roleName))
+        }
+        if snapshot.projectID == projectID {
+            names.formUnion(snapshot.roles
+                .filter { $0.agentID == principalID }
+                .map(\.name))
+        }
+        return names.sorted()
+    }
+
     func createRole(name: String, onboardingPrompt: String) async -> Bool {
         await mutate { try await api.createRole(projectID: selectedProjectID, name: name, onboardingPrompt: onboardingPrompt) }
     }

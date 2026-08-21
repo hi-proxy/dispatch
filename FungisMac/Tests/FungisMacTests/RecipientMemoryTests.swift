@@ -62,3 +62,16 @@ private func snapshot(project: String, roles: [String]) -> FungisSnapshot {
     model.applyForTesting(snapshot(project: "A", roles: ["cto"]))
     #expect(model.selectedRoles == ["cto"])
 }
+
+@Test @MainActor func hostedApprovalUsesTheAssignedRoleAsItsIdentity() {
+    let model = makeModel()
+    model.selectedProjectID = "A"
+    model.applyForTesting(snapshot(project: "A", roles: ["tester1", "tester2"]))
+
+    #expect(model.hostedRoleNames(
+        projectID: "A", principalID: "agent-tester1"
+    ) == ["tester1"])
+    #expect(model.hostedRoleNames(
+        projectID: "B", principalID: "agent-tester1"
+    ).isEmpty)
+}

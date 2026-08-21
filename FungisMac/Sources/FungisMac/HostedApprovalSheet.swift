@@ -23,6 +23,7 @@ struct HostedApprovalPresenter: View {
 }
 
 struct HostedApprovalBadge: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var coordinator: HostedAgentCoordinator
 
     var body: some View {
@@ -33,7 +34,7 @@ struct HostedApprovalBadge: View {
                 HStack(spacing: 7) {
                     Image(systemName: "exclamationmark.shield.fill")
                         .foregroundStyle(.orange)
-                    Text("권한 요청 \(coordinator.pendingApprovals.count)개")
+                    Text(badgeLabel)
                         .font(.caption).foregroundStyle(.orange)
                     Spacer()
                     Image(systemName: "chevron.up")
@@ -46,9 +47,20 @@ struct HostedApprovalBadge: View {
             .help("대기 중인 hosted agent 권한 요청 열기")
         }
     }
+
+    private var badgeLabel: String {
+        let names = Set(coordinator.pendingApprovals.flatMap {
+            model.hostedRoleNames(projectID: $0.projectID, principalID: $0.principalID)
+        }).sorted()
+        guard !names.isEmpty else { return "권한 요청 \(coordinator.pendingApprovals.count)개" }
+        let visible = names.prefix(2).map { "@\($0)" }.joined(separator: " · ")
+        let remainder = names.count > 2 ? " 외 \(names.count - 2)" : ""
+        return "\(visible)\(remainder) · 권한 요청 \(coordinator.pendingApprovals.count)개"
+    }
 }
 
 private struct HostedApprovalSheet: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var coordinator: HostedAgentCoordinator
     let approval: HostedApprovalRequest
 
@@ -58,7 +70,10 @@ private struct HostedApprovalSheet: View {
                 Label(approval.kind.title, systemImage: "exclamationmark.shield.fill")
                     .font(.title2.bold()).foregroundStyle(.orange)
                 Spacer()
-                Text(queuePosition).font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(roleLabel).font(.headline)
+                    Text(queuePosition).font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Text("Codex가 workspace 경계 밖의 작업을 요청했습니다.")
@@ -66,6 +81,7 @@ private struct HostedApprovalSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    detail("역할", roleLabel)
                     detail("세션", approval.sessionLabel)
                     if let reason = approval.reason { detail("이유", reason) }
                     if let command = approval.command { detail("명령", command, monospaced: true) }
@@ -114,6 +130,15 @@ private struct HostedApprovalSheet: View {
         }
         let index = sessionQueue.firstIndex { $0.id == approval.id } ?? 0
         return "\(index + 1) / \(sessionQueue.count)"
+    }
+
+    private var roleLabel: String {
+        let names = model.hostedRoleNames(
+            projectID: approval.projectID, principalID: approval.principalID
+        )
+        return names.isEmpty
+            ? "역할 미확인"
+            : names.map { "@\($0)" }.joined(separator: " · ")
     }
 
     @ViewBuilder
