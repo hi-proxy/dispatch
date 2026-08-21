@@ -871,12 +871,33 @@ def create_web_app(
     def hosted_inbox(principal_id: str, after: int = 0) -> list[dict]:
         try:
             with client() as pm:
+                state = pm._request(
+                    "GET",
+                    f"/v1/inbox/state/{urllib.parse.quote(principal_id)}",
+                )
+                assert isinstance(state, dict)
+                # AppModel의 in-memory cursor는 앱 재시작 때 0으로 돌아간다.
+                # 서버 ack cursor보다 뒤로 물러나면 처리 완료 prompt를 재실행해
+                # 새 메시지를 영원히 막을 수 있으므로 durable cursor가 하한이다.
+                cursor = max(after, int(state.get("processed_seq", 0)))
                 result = pm._request(
                     "GET",
                     f"/v1/messages?recipient={urllib.parse.quote(principal_id)}"
-                    f"&caller={urllib.parse.quote(principal_id)}&after={after}",
+                    f"&caller={urllib.parse.quote(principal_id)}&after={cursor}",
                 )
                 assert isinstance(result, list)
+                for message in result:
+                    reply_id = (
+                        f"hosted-reply:{principal_id}:"
+                        f"{int(message['project_seq'])}"
+                    )
+                    status = pm._request(
+                        "GET",
+                        f"/v1/messages/{urllib.parse.quote(reply_id, safe='')}/status"
+                        f"?caller={urllib.parse.quote(principal_id)}",
+                    )
+                    assert isinstance(status, dict)
+                    message["reply_exists"] = bool(status.get("exists"))
                 return result
         except Exception as error:
             raise fail(error) from error

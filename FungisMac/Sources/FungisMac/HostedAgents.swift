@@ -1441,7 +1441,17 @@ final class HostedAgentCoordinator: ObservableObject {
                     let messages = try await self.api.hostedInbox(
                         principalID: session.principalID, after: after
                     )
+                    self.turnFailures.removeValue(forKey: session.id)
                     for message in messages {
+                        // reply는 저장됐지만 ack만 실패한 crash window. prompt를
+                        // 다시 실행하면 도구 부작용과 다른 답변을 만들 수 있다.
+                        if message.replyExists == true {
+                            try await self.api.ackHosted(
+                                principalID: session.principalID, through: message.seq
+                            )
+                            after = max(after, message.seq)
+                            continue
+                        }
                         let answer: String
                         if let pending = pendingAnswers[message.seq] {
                             answer = pending
@@ -1481,8 +1491,10 @@ final class HostedAgentCoordinator: ObservableObject {
                         after = max(after, message.seq)
                     }
                 } catch {
-                    // The binding remains attached so the role can show SESSION OFFLINE if
-                    // the provider process dies. A later explicit Stop owns cleanup.
+                    // provider process가 살아 있어도 inbox worker가 막힐 수 있다.
+                    // 조용히 삼키면 connected/idle만 보여 장애를 숨기므로 UI에서
+                    // remote retry 판단을 할 수 있도록 실패를 남긴다.
+                    self.turnFailures[session.id] = error.localizedDescription
                 }
                 try? await Task.sleep(for: .seconds(1))
             }

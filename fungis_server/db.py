@@ -2142,6 +2142,14 @@ class FungisDB:
             result.append(message)
         return result
 
+    def message_sender(self, message_id: str) -> str | None:
+        """Return only the identity needed for an idempotency status check."""
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT sender_id FROM messages WHERE id = ?", (message_id,)
+            ).fetchone()
+        return str(row["sender_id"]) if row is not None else None
+
     def timeline(self, principal_id: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._lock:
             rows = self._connection.execute(

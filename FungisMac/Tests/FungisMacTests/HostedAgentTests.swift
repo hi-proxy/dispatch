@@ -370,6 +370,7 @@ private actor FakeHostedProviderClient: HostedAgentProviderClient {
     private(set) var resumedThreads: [(String, String)] = []
     private(set) var startedConfigurations: [HostedAgentConfiguration?] = []
     private(set) var resumedConfigurations: [HostedAgentConfiguration?] = []
+    private(set) var runTexts: [String] = []
     private var approvalHandler: HostedApprovalHandler?
     private var exited = false
     private var exitWaiters: [CheckedContinuation<Void, Never>] = []
@@ -406,6 +407,7 @@ private actor FakeHostedProviderClient: HostedAgentProviderClient {
     func runTurn(
         threadID: String, text: String, onEvent: HostedTurnEventHandler?
     ) async throws -> String {
+        runTexts.append(text)
         await onEvent?(.started(turnID: "turn-fake"))
         return ""
     }
@@ -746,6 +748,33 @@ private actor FakeHostedAgentAPI: HostedAgentAPIClient {
     await coordinator.stopFailedRecovery(missingWorkspace.principalID)
     #expect(coordinator.recoveryFailures.isEmpty)
     #expect(await api.disconnectForgetValues == [true, true])
+}
+
+@MainActor
+@Test func storedHostedReplyIsAckedWithoutRunningThePromptAgain() async throws {
+    let factory = FakeHostedProviderFactory()
+    let api = FakeHostedAgentAPI()
+    await api.setInboxMessages([
+        HostedInboxMessage(
+            seq: 41, projectSeq: 7, senderID: "pm-1", body: "이미 답한 작업",
+            replyExists: true
+        )
+    ])
+    let coordinator = HostedAgentCoordinator(
+        makeCodexClient: { factory.make() }, api: api
+    )
+    let session = try await coordinator.createAndAssign(
+        provider: .codex, cwd: FileManager.default.temporaryDirectory.path,
+        projectID: "project-1", roleID: "role-1", sendOnboarding: false
+    )
+    for _ in 0..<100 where await api.ackedThrough.isEmpty {
+        try await Task.sleep(for: .milliseconds(10))
+    }
+
+    #expect(await api.ackedThrough == [41])
+    #expect(await api.replies.isEmpty)
+    #expect(await factory.client(at: 0).runTexts.isEmpty)
+    await coordinator.stop(session)
 }
 
 @MainActor

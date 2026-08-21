@@ -291,6 +291,13 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
             await hub.publish(event)
         return message
 
+    @app.get("/v1/messages/{message_id}/status")
+    def message_status(message_id: str, caller: str = Query(...)) -> dict[str, bool]:
+        # hosted worker가 reply 저장 뒤 ack 전에 죽으면 같은 prompt를 다시
+        # 실행하지 않고 기존 reply를 인정해야 한다. 다른 sender의 id 존재는
+        # 노출하지 않는다.
+        return {"exists": db.message_sender(message_id) == caller}
+
     @app.get("/v1/workspaces/{workspace_id}/roles")
     def roles(workspace_id: str) -> list[dict]:
         return db.roles(workspace_id)

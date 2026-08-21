@@ -219,11 +219,14 @@ struct HostedInboxMessage: Decodable, Sendable {
     var projectSeq: Int
     var senderID: String
     var body: String
+    /// reply 저장 후 ack 전에 앱이 죽었는지 서버의 deterministic id로 판정한다.
+    var replyExists: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case seq, body
         case projectSeq = "project_seq"
         case senderID = "sender_id"
+        case replyExists = "reply_exists"
     }
 }
 

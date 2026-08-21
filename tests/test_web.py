@@ -345,6 +345,7 @@ def test_hosted_session_can_be_assigned_process_inbox_and_reply(tmp_path, monkey
                 "/api/hosted-sessions/agent-hosted-codex-1/inbox"
             ).json()
             assert [item["body"] for item in inbox] == ["hello hosted"]
+            assert inbox[0]["reply_exists"] is False
 
             reply = client.post(
                 "/api/hosted-sessions/agent-hosted-codex-1/reply",
@@ -367,10 +368,18 @@ def test_hosted_session_can_be_assigned_process_inbox_and_reply(tmp_path, monkey
             )
             assert duplicate.status_code == 201
             assert duplicate.json()["seq"] == reply.json()["seq"]
+            awaiting_ack = client.get(
+                "/api/hosted-sessions/agent-hosted-codex-1/inbox"
+            ).json()
+            assert len(awaiting_ack) == 1
+            assert awaiting_ack[0]["reply_exists"] is True
             assert client.post(
                 "/api/hosted-sessions/agent-hosted-codex-1/ack",
                 json={"through_seq": sent["seq"]},
             ).status_code == 200
+            assert client.get(
+                "/api/hosted-sessions/agent-hosted-codex-1/inbox"
+            ).json() == []
             timeline = client.get("/api/state").json()["timeline"]
             assert timeline[-1]["body"] == "hello PM"
 
