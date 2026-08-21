@@ -23,6 +23,30 @@ private func snapshotWith(project: String, rooms: [FungisProject]) -> FungisSnap
     return value
 }
 
+@MainActor
+private func chatMessage(seq: Int, body: String) throws -> ChatMessage {
+    let json: [String: Any] = [
+        "seq": seq, "project_seq": seq,
+        "sender_id": "pm", "sender_name": "PM", "body": body,
+        "created_at": "2026-08-21T00:00:00.000Z",
+        "recipients": [], "references": [], "tags": [],
+        "detected_contexts": [], "role_recipients": [],
+    ]
+    return try JSONDecoder().decode(
+        ChatMessage.self, from: JSONSerialization.data(withJSONObject: json)
+    )
+}
+
+@MainActor
+private func role(project: String, name: String) -> WorkspaceRole {
+    WorkspaceRole(
+        id: "\(project)-\(name)", workspaceID: project, name: name,
+        onboardingPrompt: "", assigned: false, assignmentID: nil,
+        agentID: nil, agentName: nil, assignedAt: nil, onboardingSent: false,
+        sessionConnected: false, hasAvatar: false, avatarUpdatedAt: nil
+    )
+}
+
 @Test @MainActor func firstLaunchStartsInHQ() {
     // 기억한 것이 없으면 HQ 다. 아무 방이나 고르면 남의 방에 떨어져 거기 대고
     // 말하게 된다.
@@ -65,5 +89,39 @@ private func snapshotWith(project: String, rooms: [FungisProject]) -> FungisSnap
         rooms: [room("hq", kind: "hq"), room("fungis")]
     ))
     #expect(model.selectedProjectID == "fungis")
+    UserDefaults.standard.removeObject(forKey: roomKey)
+}
+
+@Test @MainActor func switchingRoomsNeverStagesOneRoomUnderAnotherRoomsName() throws {
+    UserDefaults.standard.removeObject(forKey: roomKey)
+    let model = AppModel()
+    model.selectProject("test-pj-3")
+    var testRoom = snapshotWith(
+        project: "test-pj-3",
+        rooms: [room("test-pj-3"), room("fungis")]
+    )
+    testRoom.timeline = [try chatMessage(seq: 1, body: "test only")]
+    testRoom.roles = [role(project: "test-pj-3", name: "tester")]
+    model.applyForTesting(testRoom)
+
+    model.selectProject("fungis")
+
+    #expect(model.snapshot.projectID == "fungis")
+    #expect(model.snapshot.timeline.isEmpty)
+    #expect(model.snapshot.roles.isEmpty)
+
+    var fungis = snapshotWith(
+        project: "fungis",
+        rooms: [room("test-pj-3"), room("fungis")]
+    )
+    fungis.timeline = [try chatMessage(seq: 2, body: "fungis only")]
+    fungis.roles = [role(project: "fungis", name: "exec")]
+    model.applyForTesting(fungis)
+    #expect(model.snapshot.timeline.map(\.body) == ["fungis only"])
+
+    model.selectProject("test-pj-3")
+    #expect(model.snapshot.projectID == "test-pj-3")
+    #expect(model.snapshot.timeline.map(\.body) == ["test only"])
+    #expect(model.snapshot.roles.isEmpty)
     UserDefaults.standard.removeObject(forKey: roomKey)
 }

@@ -97,6 +97,14 @@ final class AppModel: ObservableObject {
                 try await hostedAgents.restorePersistedSessions()
                 // WebSocket 첫 push를 기다리지 않고 HTTP로 화면을 먼저 채운다.
                 await refresh()
+                // refresh 중에 다시 방을 옮겼다면 이 iteration의 project로
+                // WebSocket을 열면 안 된다. selectProject가 취소한 것은 아직
+                // 이전 streamTask라, 이 확인이 없으면 떠난 방 stream이 영구히
+                // 새 방 갱신을 가로막는다.
+                guard streamingProject == selectedProjectID else {
+                    switchingProject = false
+                    continue
+                }
                 let task = Task {
                     for try await fresh in api.snapshots(projectID: streamingProject) {
                         try Task.checkCancellation()
@@ -359,22 +367,36 @@ final class AppModel: ObservableObject {
         let previous = selectedProjectID
         timelineCache[selectedProjectID] = (Array(snapshot.timeline.suffix(10)), hasOlderMessages)
         selectedProjectID = id
+        let cachedTimeline: [ChatMessage]
         if let cached = timelineCache[id] {
             // 들어갈 때는 최신 10건만 붙인다. 쌓아둔 과거까지 한꺼번에 붙이면
             // 보이지도 않는 행을 전부 다시 레이아웃하게 된다.
-            snapshot.timeline = Array(cached.messages.suffix(10))
+            cachedTimeline = Array(cached.messages.suffix(10))
             hasOlderMessages = cached.hasOlder || cached.messages.count > 10
             // 캐시를 살려 두고 refresh 결과를 병합한다.
             timelineProjectID = id
             prefetchedProjectID = nil
             isLoadingTimeline = false
         } else {
-            snapshot.timeline = []
+            cachedTimeline = []
             hasOlderMessages = true
             timelineProjectID = nil
             prefetchedProjectID = nil
             isLoadingTimeline = true
         }
+        // selectedProjectID만 먼저 바꾸고 snapshot의 나머지를 이전 방 것으로
+        // 두면 새 방 제목 아래에 이전 방 Roles·요청·핀과 새 방 캐시가 한 화면에
+        // 섞인다. 전역인 프로젝트/에이전트 목록은 유지하되 방 소속 값은 첫
+        // 응답이 올 때까지 비워서 snapshot 자체도 언제나 한 방만 나타내게 한다.
+        snapshot.projectID = id
+        snapshot.timeline = cachedTimeline
+        snapshot.attention = []
+        snapshot.bookmarks = []
+        snapshot.timelinePins = []
+        snapshot.shared = []
+        snapshot.work = []
+        snapshot.roles = []
+        snapshot.permissionRequests = []
         // 수신자 선택은 방마다 기억한다. 방을 옮겼다 돌아왔을 때 누구에게
         // 말하던 중이었는지 다시 고르게 하면, 옮길 때마다 그 일을 반복한다.
         recipientMemory[previous] = RecipientSelection(
