@@ -6,9 +6,7 @@ enum MessagePrettyPrinter {
     )
 
     static func format(_ source: String) -> String {
-        let normalized = source
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
+        let normalized = layoutText(source)
         var result = ""
         var isAtLineStart = true
 
@@ -31,6 +29,101 @@ enum MessagePrettyPrinter {
             isAtLineStart = character == "\n"
         }
 
+        return result
+    }
+
+    /// shell/JSON 경계를 거치며 글자 두 개 `\\n`으로 남은 줄바꿈을 Pretty에서만
+    /// 복원한다. 원문은 저장된 그대로 남고, 코드 울타리 안의 escape도 코드이므로
+    /// 건드리지 않는다. `\\\\n`처럼 escape된 역슬래시도 줄바꿈으로 오인하지 않는다.
+    static func layoutText(_ source: String) -> String {
+        var decoded = ""
+        var cursor = source.startIndex
+        var inCodeFence = false
+
+        while cursor < source.endIndex {
+            if source[cursor...].hasPrefix("```") {
+                decoded.append("```")
+                cursor = source.index(cursor, offsetBy: 3)
+                inCodeFence.toggle()
+                continue
+            }
+
+            let character = source[cursor]
+            if character == "\\", !inCodeFence {
+                let next = source.index(after: cursor)
+                if next < source.endIndex {
+                    if source[next] == "\\" {
+                        decoded.append("\\\\")
+                        cursor = source.index(after: next)
+                        continue
+                    }
+                    if source[next] == "n" {
+                        decoded.append("\n")
+                        cursor = source.index(after: next)
+                        continue
+                    }
+                    if source[next] == "r" {
+                        var afterEscape = source.index(after: next)
+                        if afterEscape < source.endIndex, source[afterEscape] == "\\" {
+                            let possibleN = source.index(after: afterEscape)
+                            if possibleN < source.endIndex, source[possibleN] == "n" {
+                                afterEscape = source.index(after: possibleN)
+                            }
+                        }
+                        decoded.append("\n")
+                        cursor = afterEscape
+                        continue
+                    }
+                }
+            }
+            decoded.append(character)
+            cursor = source.index(after: cursor)
+        }
+
+        let normalized = decoded
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        return splitInlineNumberedItems(normalized)
+    }
+
+    /// `요약 1) 첫째 2) 둘째`처럼 한 줄에 붙은 번호 목록을 블록 parser가
+    /// 읽을 수 있는 줄로 만든다. `함수(1)` 같은 괄호 참조와 code fence는 둔다.
+    private static func splitInlineNumberedItems(_ source: String) -> String {
+        var result = ""
+        var cursor = source.startIndex
+        var inCodeFence = false
+
+        while cursor < source.endIndex {
+            if source[cursor...].hasPrefix("```") {
+                result.append("```")
+                cursor = source.index(cursor, offsetBy: 3)
+                inCodeFence.toggle()
+                continue
+            }
+
+            if !inCodeFence, source[cursor].isNumber,
+               result.last == " " || result.last == "\t" {
+                var end = cursor
+                var digitCount = 0
+                while end < source.endIndex, source[end].isNumber, digitCount < 4 {
+                    digitCount += 1
+                    end = source.index(after: end)
+                }
+                if digitCount <= 3, end < source.endIndex, source[end] == ")" {
+                    let afterMarker = source.index(after: end)
+                    if afterMarker < source.endIndex,
+                       source[afterMarker] == " " || source[afterMarker] == "\t" {
+                        while result.last == " " || result.last == "\t" {
+                            result.removeLast()
+                        }
+                        result.append("\n")
+                    }
+                }
+            }
+
+            result.append(source[cursor])
+            cursor = source.index(after: cursor)
+        }
         return result
     }
 

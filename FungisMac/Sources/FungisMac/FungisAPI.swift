@@ -20,14 +20,51 @@ struct FungisAPI: Sendable {
     }
 
     func resolvePermission(
-        requestID: String, projectID: String, status: String
+        requestID: String, projectID: String, status: String,
+        decision: String? = nil, decisionScope: String? = nil
     ) async throws {
-        struct Payload: Encodable { let project_id: String; let status: String }
+        struct Payload: Encodable {
+            let project_id: String
+            let status: String
+            let decision: String?
+            let decision_scope: String?
+        }
         let _: EmptyResponse = try await request(
             "api/permission-requests/\(encoded(requestID))/resolve", method: "POST",
-            body: Payload(project_id: projectID, status: status),
+            body: Payload(
+                project_id: projectID, status: status, decision: decision,
+                decision_scope: decisionScope
+            ),
             acceptsAnyObject: true
         )
+    }
+
+    func createHostedPermission(_ approval: HostedApprovalRequest) async throws -> String {
+        struct Payload: Encodable {
+            let project_id: String
+            let session_id: String
+            let agent_id: String
+            let tool_name: String
+            let tool_input: String
+            let request_kind: String
+            let provider_request_id: String
+            let thread_id: String?
+            let turn_id: String?
+            let available_decisions: String
+        }
+        struct Created: Decodable { let id: String }
+        let created: Created = try await request(
+            "api/permission-requests", method: "POST",
+            body: Payload(
+                project_id: approval.projectID, session_id: approval.threadID ?? approval.principalID,
+                agent_id: approval.principalID, tool_name: approval.kind.title,
+                tool_input: approval.detailJSON, request_kind: approval.kind.rawValue,
+                provider_request_id: approval.providerRequestID.auditValue,
+                thread_id: approval.threadID, turn_id: approval.turnID,
+                available_decisions: approval.availableDecisions.joined(separator: ",")
+            )
+        )
+        return created.id
     }
 
     func state(projectID: String = "local") async throws -> FungisSnapshot {
@@ -253,6 +290,73 @@ struct FungisAPI: Sendable {
             "api/roles/\(id)/assignment", method: "PUT",
             body: Payload(agent_id: agentID, send_onboarding: sendOnboarding),
             acceptsAnyObject: true
+        )
+    }
+
+    func connectHostedSession(_ session: HostedAgentSession) async throws {
+        struct Payload: Encodable {
+            let local_name: String
+            let principal_id: String
+            let provider: String
+            let session_id: String
+            let host_pid: Int32
+            let project_id: String
+            let cwd: String
+            let model: String?
+            let reasoning_effort: String?
+        }
+        let _: EmptyResponse = try await request(
+            "api/hosted-sessions/\(encoded(session.principalID))", method: "PUT",
+            body: Payload(
+                local_name: session.localName, principal_id: session.principalID,
+                provider: session.provider.rawValue, session_id: session.providerSessionID,
+                host_pid: ProcessInfo.processInfo.processIdentifier,
+                project_id: session.projectID, cwd: session.cwd,
+                model: session.model, reasoning_effort: session.reasoningEffort
+            ), acceptsAnyObject: true
+        )
+    }
+
+    func recoverableHostedSessions() async throws -> [HostedAgentRecoveryRecord] {
+        try await request("api/hosted-sessions")
+    }
+
+    func disconnectHostedSession(_ principalID: String, forget: Bool) async throws {
+        let _: EmptyResponse = try await request(
+            "api/hosted-sessions/\(encoded(principalID))?forget=\(forget)", method: "DELETE"
+        )
+    }
+
+    func hostedInbox(principalID: String, after: Int) async throws -> [HostedInboxMessage] {
+        try await request(
+            "api/hosted-sessions/\(encoded(principalID))/inbox?after=\(after)"
+        )
+    }
+
+    func replyFromHosted(
+        principalID: String, projectID: String, recipientID: String,
+        body: String, inReplyToProjectSeq: Int
+    ) async throws {
+        struct Payload: Encodable {
+            let project_id: String
+            let recipient_id: String
+            let body: String
+            let in_reply_to_project_seq: Int
+        }
+        let _: EmptyResponse = try await request(
+            "api/hosted-sessions/\(encoded(principalID))/reply", method: "POST",
+            body: Payload(
+                project_id: projectID, recipient_id: recipientID, body: body,
+                in_reply_to_project_seq: inReplyToProjectSeq
+            ), acceptsAnyObject: true
+        )
+    }
+
+    func ackHosted(principalID: String, through: Int) async throws {
+        struct Payload: Encodable { let through_seq: Int }
+        let _: EmptyResponse = try await request(
+            "api/hosted-sessions/\(encoded(principalID))/ack", method: "POST",
+            body: Payload(through_seq: through), acceptsAnyObject: true
         )
     }
 

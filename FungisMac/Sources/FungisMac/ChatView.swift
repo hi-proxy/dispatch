@@ -60,6 +60,11 @@ struct ChatView: View {
                         ScrollView {
                             LazyVStack(spacing: 8) {
                                 Color.clear.frame(height: 1).id("chat-bottom")
+                                HostedTurnTimelineRows(
+                                    coordinator: model.hostedAgents,
+                                    projectID: model.selectedProjectID
+                                )
+                                .scaleEffect(x: 1, y: -1, anchor: .center)
                                 if filteredTimeline.isEmpty, !model.isLoadingTimeline {
                                     Group { isHQ ? AnyView(emptyHQGuide) : AnyView(emptyRoomGuide) }
                                         // 뒤집힌 스택 안이라 한쪽 패딩은 방향이
@@ -461,6 +466,80 @@ struct ChatView: View {
         if names.isEmpty { return "Select recipients" + suffix }
         if names.count == 1 { return names[0] + suffix }
         return "\(names.count) recipients" + suffix
+    }
+}
+
+private struct HostedTurnTimelineRows: View {
+    @ObservedObject var coordinator: HostedAgentCoordinator
+    let projectID: String
+
+    var body: some View {
+        ForEach(coordinator.sessions.filter { $0.projectID == projectID }) { session in
+            if let progress = coordinator.activeTurns[session.id] {
+                HStack(alignment: .bottom, spacing: 10) {
+                    Image(systemName: "sparkles")
+                        .frame(width: 30, height: 30)
+                        .background(.purple.opacity(0.16), in: Circle())
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(session.localName).font(.caption.bold())
+                            Text("응답 중").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Text(progress.text.isEmpty ? "Codex가 작업을 시작했습니다…" : progress.text)
+                            .textSelection(.enabled)
+                        if !progress.activities.isEmpty {
+                            VStack(alignment: .leading, spacing: 5) {
+                                ForEach(progress.activities) { activity in
+                                    HStack(alignment: .top, spacing: 6) {
+                                        Image(systemName: activityIcon(activity.state))
+                                            .foregroundStyle(activityTint(activity.state))
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(activity.title).font(.caption.bold())
+                                            if let detail = activity.detail, !detail.isEmpty {
+                                                Text(detail).font(.caption2)
+                                                    .foregroundStyle(.secondary).lineLimit(3)
+                                                    .textSelection(.enabled)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(8)
+                            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        if let interruptError = progress.interruptError {
+                            Text(interruptError).font(.caption2).foregroundStyle(.red)
+                        }
+                        HStack {
+                            Spacer()
+                            Button(progress.interruptRequested ? "중단 중…" : "Interrupt") {
+                                Task { await coordinator.interruptTurn(session) }
+                            }
+                            .disabled(progress.turnID == nil || progress.interruptRequested)
+                        }
+                    }
+                    .padding(12)
+                    .background(.purple.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                }
+                .frame(maxWidth: 720, alignment: .leading)
+            }
+        }
+    }
+
+    private func activityIcon(_ state: HostedAgentActivityState) -> String {
+        switch state {
+        case .running: "hourglass"
+        case .succeeded: "checkmark.circle.fill"
+        case .failed: "xmark.circle.fill"
+        }
+    }
+
+    private func activityTint(_ state: HostedAgentActivityState) -> Color {
+        switch state {
+        case .running: .secondary
+        case .succeeded: .green
+        case .failed: .red
+        }
     }
 }
 

@@ -10,6 +10,7 @@ struct RecipientSelection: Codable {
 
 @MainActor
 final class AppModel: ObservableObject {
+    let hostedAgents = HostedAgentCoordinator()
     @Published var snapshot = FungisSnapshot.empty
     /// 보드는 방에 속하지 않아서 스냅샷과 따로 받는다.
     @Published var board = BoardSnapshot.empty
@@ -93,6 +94,7 @@ final class AppModel: ObservableObject {
             let streamingProject = selectedProjectID
             do {
                 try await DaemonManager.shared.ensureRunning()
+                try await hostedAgents.restorePersistedSessions()
                 // WebSocket 첫 push를 기다리지 않고 HTTP로 화면을 먼저 채운다.
                 await refresh()
                 let task = Task {
@@ -201,6 +203,57 @@ final class AppModel: ObservableObject {
         }
         errorMessage = "세션 연결이 확인되지 않아 배정하지 못했습니다."
         return false
+    }
+
+    func assignHosted(
+        roleID: String, session: HostedAgentSession, sendOnboarding: Bool
+    ) async -> Bool {
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            try await hostedAgents.assign(
+                session: session, roleID: roleID, projectID: selectedProjectID,
+                sendOnboarding: sendOnboarding
+            )
+            apply(try await api.state(projectID: selectedProjectID))
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func createHostedAndAssign(
+        provider: HostedAgentProviderID, roleID: String, cwd: String,
+        sendOnboarding: Bool, configuration: HostedAgentConfiguration
+    ) async -> Bool {
+        isMutating = true
+        defer { isMutating = false }
+        do {
+            _ = try await hostedAgents.createAndAssign(
+                provider: provider, cwd: cwd, projectID: selectedProjectID,
+                roleID: roleID, sendOnboarding: sendOnboarding,
+                configuration: configuration
+            )
+            apply(try await api.state(projectID: selectedProjectID))
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func stopHosted(_ session: HostedAgentSession) async {
+        isMutating = true
+        defer { isMutating = false }
+        await hostedAgents.stop(session)
+        do {
+            apply(try await api.state(projectID: selectedProjectID))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func connectedLocalName(_ surfaceID: String) -> String? {

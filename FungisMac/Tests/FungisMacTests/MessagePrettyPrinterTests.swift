@@ -26,6 +26,36 @@ import Testing
     #expect(MessagePrettyPrinter.format(source) == source)
 }
 
+@Test func escapedNewlinesBecomeLayoutLinesOnlyInPretty() {
+    let source = "요약\\n\\n1) 첫째\\n2) 둘째"
+
+    #expect(MessagePrettyPrinter.layoutText(source) == "요약\n\n1) 첫째\n2) 둘째")
+    #expect(source == "요약\\n\\n1) 첫째\\n2) 둘째")
+}
+
+@Test func inlineParenthesisNumbersBecomePrettyLines() {
+    let source = "정리 1) 첫째 2) 둘째"
+
+    #expect(MessagePrettyPrinter.layoutText(source) == "정리\n1) 첫째\n2) 둘째")
+    #expect(source == "정리 1) 첫째 2) 둘째")
+}
+
+@Test func parenthesisReferencesAndCodeAreNotNumberedLists() {
+    #expect(MessagePrettyPrinter.layoutText("함수(1) 결과") == "함수(1) 결과")
+    let fenced = "```text\necho 1) 그대로\n```"
+    #expect(MessagePrettyPrinter.layoutText(fenced) == fenced)
+}
+
+@Test func escapedNewlinesInsideCodeFencesStayLiteral() {
+    let source = #"앞\n```text"# + "\n" + #"a\nb"# + "\n" + #"```\n뒤"#
+    let layout = MessagePrettyPrinter.layoutText(source)
+
+    #expect(layout.hasPrefix("앞\n```text\n"))
+    #expect(layout.contains("a\\nb"))
+    #expect(layout.hasSuffix("```\n뒤"))
+    #expect(MessagePrettyPrinter.layoutText(#"C:\\new"#) == #"C:\\new"#)
+}
+
 @Test func rawSourceRemainsAvailableWithoutFormatting() {
     let source = "한 줄 ■원문"
 
