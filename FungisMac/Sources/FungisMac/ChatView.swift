@@ -1408,24 +1408,12 @@ private struct MessageRow: View {
     }
 
     private var contextMetadata: some View {
-        HStack(spacing: 6) {
-            if let parent = message.inReplyToProjectSeq ?? message.inReplyTo {
-                Text("↳ #\(parent)").font(.caption2).foregroundStyle(.tertiary)
-            }
-            if let track = message.track {
-                ContextButton(label: track, color: contextColor(track), icon: "point.topleft.down.to.point.bottomright.curvepath") {
-                    selectContext(track)
-                }
-            }
-            ForEach(message.tags, id: \.self) { tag in
-                ContextButton(label: tag, color: contextColor(tag), icon: "tag") {
-                    selectContext(tag)
-                }
-            }
-            ForEach(message.detectedContexts, id: \.self) { detected in
-                DetectedContextButton(context: detected) { selectContext(detected.value) }
-            }
-        }
+        ContextMetadataRow(
+            parentSequence: message.inReplyToProjectSeq ?? message.inReplyTo,
+            track: message.track, tags: message.tags,
+            detectedContexts: message.detectedContexts,
+            selectContext: selectContext
+        )
     }
 
     private var senderRole: WorkspaceRole? {
@@ -1603,6 +1591,140 @@ private struct ContextTrayControl: View {
     }
 }
 
+enum ContextMetadataDensity {
+    case full, medium, compact
+}
+
+struct ContextMetadataPlan: Equatable {
+    let visibleTagCount: Int
+    let visibleDetectedCount: Int
+
+    static func make(
+        density: ContextMetadataDensity, hasTrack: Bool,
+        tagCount: Int, detectedCount: Int
+    ) -> ContextMetadataPlan {
+        switch density {
+        case .full:
+            ContextMetadataPlan(
+                visibleTagCount: tagCount,
+                visibleDetectedCount: detectedCount
+            )
+        case .medium:
+            ContextMetadataPlan(
+                visibleTagCount: min(1, tagCount), visibleDetectedCount: 0
+            )
+        case .compact:
+            ContextMetadataPlan(
+                visibleTagCount: hasTrack ? 0 : min(1, tagCount),
+                visibleDetectedCount: 0
+            )
+        }
+    }
+}
+
+private struct ContextMetadataRow: View {
+    let parentSequence: Int?
+    let track: String?
+    let tags: [String]
+    let detectedContexts: [DetectedContext]
+    let selectContext: (String) -> Void
+
+    var body: some View {
+        // Text를 한 HStack 안에서 무제한 압축하면 캡슐의 글자만 사라져
+        // 동그라미가 된다. 각 후보는 자기 폭을 지키고, 맞지 않으면 다음
+        // 밀도의 후보로 통째로 내려간다.
+        ViewThatFits(in: .horizontal) {
+            candidate(.full)
+            candidate(.medium)
+            candidate(.compact)
+        }
+    }
+
+    private func candidate(_ density: ContextMetadataDensity) -> some View {
+        let plan = ContextMetadataPlan.make(
+            density: density, hasTrack: track != nil,
+            tagCount: tags.count, detectedCount: detectedContexts.count
+        )
+        let visibleTags = Array(tags.prefix(plan.visibleTagCount))
+        let hiddenTags = Array(tags.dropFirst(plan.visibleTagCount))
+        let visibleDetected = Array(detectedContexts.prefix(plan.visibleDetectedCount))
+        let hiddenDetected = Array(detectedContexts.dropFirst(plan.visibleDetectedCount))
+        return HStack(spacing: 6) {
+            if let parentSequence {
+                Text("↳ #\(parentSequence)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            if let track {
+                ContextButton(
+                    label: track, color: contextColor(track),
+                    icon: "point.topleft.down.to.point.bottomright.curvepath"
+                ) { selectContext(track) }
+            }
+            ForEach(visibleTags, id: \.self) { tag in
+                ContextButton(label: tag, color: contextColor(tag), icon: "tag") {
+                    selectContext(tag)
+                }
+            }
+            ForEach(visibleDetected, id: \.self) { detected in
+                DetectedContextButton(context: detected) {
+                    selectContext(detected.value)
+                }
+            }
+            if !hiddenTags.isEmpty || !hiddenDetected.isEmpty {
+                ContextOverflowMenu(
+                    tags: hiddenTags, detectedContexts: hiddenDetected,
+                    selectContext: selectContext
+                )
+            }
+        }
+    }
+}
+
+private struct ContextOverflowMenu: View {
+    let tags: [String]
+    let detectedContexts: [DetectedContext]
+    let selectContext: (String) -> Void
+
+    private var count: Int { tags.count + detectedContexts.count }
+
+    var body: some View {
+        Menu {
+            if !tags.isEmpty {
+                Section("Tags") {
+                    ForEach(tags, id: \.self) { tag in
+                        Button { selectContext(tag) } label: {
+                            Label(tag, systemImage: "tag")
+                        }
+                    }
+                }
+            }
+            if !detectedContexts.isEmpty {
+                Section("Detected") {
+                    ForEach(detectedContexts, id: \.self) { context in
+                        Button { selectContext(context.value) } label: {
+                            Label(
+                                "\(context.kind):\(context.value)",
+                                systemImage: context.verified
+                                    ? "checkmark.seal" : "sparkle.magnifyingglass"
+                            )
+                        }
+                    }
+                }
+            }
+        } label: {
+            Text("+\(count)").font(.caption2.bold())
+                .padding(.horizontal, 7).padding(.vertical, 3)
+                .contentShape(Capsule())
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize(horizontal: true, vertical: false)
+        .foregroundStyle(.secondary)
+        .background(Color.secondary.opacity(0.1), in: Capsule())
+        .help("숨긴 컨텍스트 \(count)개")
+    }
+}
+
 private struct ContextButton: View {
     let label: String
     let color: Color
@@ -1613,6 +1735,9 @@ private struct ContextButton: View {
         // 넣고 도형을 준다.
         Button(action: action) {
             Label(label, systemImage: icon).font(.caption2.bold())
+                .lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: 180)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 6).padding(.vertical, 3)
                 .contentShape(Capsule())
         }
@@ -1630,6 +1755,9 @@ private struct DetectedContextButton: View {
                 Image(systemName: context.verified ? "checkmark.seal" : "sparkle.magnifyingglass")
                 Text("\(context.kind):\(context.value)")
             }.font(.caption2)
+                .lineLimit(1).truncationMode(.middle)
+                .frame(maxWidth: 220)
+                .fixedSize(horizontal: true, vertical: false)
                 .padding(.horizontal, 6).padding(.vertical, 3)
                 .contentShape(Capsule())
         }.buttonStyle(.plain)
