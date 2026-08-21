@@ -1110,10 +1110,14 @@ final class HostedAgentCoordinator: ObservableObject {
             creationState = .ready(account)
 
             let threadID = try await client.startThread(cwd: cwd, configuration: configuration)
-            let suffix = String(threadID.prefix(8))
             let session = HostedAgentSession(
                 principalID: identity.principalID,
-                localName: "codex-hosted-\(suffix)", provider: .codex,
+                // Codex thread IDs are UUIDv7 values. Their leading characters are a
+                // timestamp, so two threads created close together commonly share the
+                // old 8-character prefix and then collided on principal.display_name.
+                // The full provider identity is already short enough for the server's
+                // 80-character display-name boundary and is stable across recovery.
+                localName: "codex-hosted-\(threadID)", provider: .codex,
                 providerSessionID: threadID, cwd: cwd, projectID: projectID,
                 model: configuration?.model, reasoningEffort: configuration?.reasoningEffort
             )

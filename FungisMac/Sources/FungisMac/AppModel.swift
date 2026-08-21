@@ -129,9 +129,13 @@ final class AppModel: ObservableObject {
     }
 
     func refresh() async {
-        guard !isMutating else { return }
+        // A project switch can race with the tail end of a failed mutation. Skipping
+        // this read leaves the new room on its cached Roles until another WebSocket
+        // event happens. Reads are safe during a mutation; apply() already rejects a
+        // response that belongs to a room we have since left.
+        let projectID = selectedProjectID
         do {
-            let fresh = try await api.state(projectID: selectedProjectID)
+            let fresh = try await api.state(projectID: projectID)
             apply(fresh)
             await refreshBoard()
         } catch {
@@ -560,7 +564,7 @@ final class AppModel: ObservableObject {
 
     func setRoleLead(roleID: String, isLead: Bool) async -> Bool {
         // 저장중 표시. 소집 모달이 이 동안 lead 칩을 비활성화한다.
-        // refresh()는 isMutating이면 물러서므로 끄고 나서 부른다.
+        // 저장중 표시는 요청이 끝난 뒤 끄되, 성공하면 최신 방 상태를 다시 읽는다.
         isMutating = true
         let ok = await runBoard {
             try await self.api.setRoleLead(roleID: roleID, isLead: isLead)

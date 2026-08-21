@@ -147,6 +147,25 @@ def test_hosted_identity_never_falls_back_to_current_cmux_surface(
     registry.close()
 
 
+def test_hosted_local_name_collision_does_not_replace_existing_binding(tmp_path):
+    registry = LocalRegistry(tmp_path / "node.db")
+    registry.attach_hosted(
+        "codex-hosted-same", "agent-hosted-first", "codex", "thread-first",
+        123, str(tmp_path), "project-first",
+    )
+
+    with pytest.raises(ValueError, match="hosted local name is already bound"):
+        registry.attach_hosted(
+            "codex-hosted-same", "agent-hosted-second", "codex", "thread-second",
+            456, str(tmp_path), "project-second",
+        )
+
+    binding = registry.binding("codex-hosted-same")
+    assert binding["principal_id"] == "agent-hosted-first"
+    assert binding["agent_session_id"] == "thread-first"
+    registry.close()
+
+
 def test_legacy_hosted_recovery_uses_the_project_repository_for_cwd(tmp_path):
     registry = LocalRegistry(tmp_path / "node.db")
     registry.attach_hosted(

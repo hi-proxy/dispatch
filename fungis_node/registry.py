@@ -280,6 +280,22 @@ class LocalRegistry:
         host_pid: int, cwd: str, project_id: str,
         model: str | None = None, reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
+        existing_name = self.binding(local_name)
+        if (
+            existing_name is not None
+            and existing_name.get("principal_id") != principal_id
+        ):
+            raise ValueError(
+                f"hosted local name is already bound: {local_name}"
+            )
+        existing_principal = self.binding_for_principal(principal_id)
+        if (
+            existing_principal is not None
+            and existing_principal.get("local_name") != local_name
+        ):
+            raise ValueError(
+                f"hosted principal is already bound: {principal_id}"
+            )
         data = {
             "terminal_provider": "fungis-app",
             "terminal_session_id": session_id,

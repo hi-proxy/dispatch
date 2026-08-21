@@ -444,12 +444,18 @@ private actor FakeHostedProviderClient: HostedAgentProviderClient {
 private final class FakeHostedProviderFactory: @unchecked Sendable {
     private let lock = NSLock()
     private var nextID = 1
+    private let threadIDs: [String]?
     private var storage: [FakeHostedProviderClient] = []
+
+    init(threadIDs: [String]? = nil) {
+        self.threadIDs = threadIDs
+    }
 
     func make() -> any HostedAgentProviderClient {
         lock.lock()
         defer { lock.unlock() }
-        let client = FakeHostedProviderClient(threadID: "thread-\(nextID)")
+        let threadID = threadIDs?[safe: nextID - 1] ?? "thread-\(nextID)"
+        let client = FakeHostedProviderClient(threadID: threadID)
         nextID += 1
         storage.append(client)
         return client
@@ -465,6 +471,12 @@ private final class FakeHostedProviderFactory: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return storage.count
+    }
+}
+
+private extension Array {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
 
@@ -655,6 +667,31 @@ private actor FakeHostedAgentAPI: HostedAgentAPIClient {
     #expect(firstStopped)
     #expect(!secondStopped)
 
+    await coordinator.stop(second)
+}
+
+@MainActor
+@Test func hostedNamesDoNotCollideForThreadsWithTheSameTimestampPrefix() async throws {
+    let firstThread = "019c892f-0000-7000-8000-000000000001"
+    let secondThread = "019c892f-0000-7000-8000-000000000002"
+    let factory = FakeHostedProviderFactory(threadIDs: [firstThread, secondThread])
+    let coordinator = HostedAgentCoordinator(
+        makeCodexClient: { factory.make() }, api: FakeHostedAgentAPI()
+    )
+
+    let first = try await coordinator.createAndAssign(
+        provider: .codex, cwd: FileManager.default.temporaryDirectory.path,
+        projectID: "project-1", roleID: "role-1", sendOnboarding: false
+    )
+    let second = try await coordinator.createAndAssign(
+        provider: .codex, cwd: FileManager.default.temporaryDirectory.path,
+        projectID: "project-1", roleID: "role-2", sendOnboarding: false
+    )
+
+    #expect(first.localName == "codex-hosted-\(firstThread)")
+    #expect(second.localName == "codex-hosted-\(secondThread)")
+    #expect(first.localName != second.localName)
+    await coordinator.stop(first)
     await coordinator.stop(second)
 }
 
